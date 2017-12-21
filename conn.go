@@ -128,7 +128,7 @@ func (cs *connState) start() {
 						default:
 						}
 					}
-					// if it is an invalid index, we do nothing to prevent infinite loop, next time the sender writes,
+					// If it is an invalid index, we do nothing to prevent infinite loop, next time the sender writes,
 					// he won't receive any confirmation, so he knows the receiver is dead
 				}
 
@@ -138,6 +138,8 @@ func (cs *connState) start() {
 
 			payload := make([]byte, streamLen)
 			_, err = io.ReadAtLeast(cs.conn, payload, streamLen)
+			// Maybe we will encounter an error, but we pass it to streams
+			// Next loop when we read the header, we will have the error again, that time we will broadcast
 			rs := &readState{
 				n:   streamLen,
 				err: err,

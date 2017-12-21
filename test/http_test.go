@@ -24,8 +24,8 @@ func randomString() string {
 	return string(buf)
 }
 
-// go test -timeout 20m
-func TestHTTPServer(t *testing.T) {
+// go test -v -timeout 20m
+func zTestHTTPServer(t *testing.T) {
 	// go func() {
 	// 	log.Println(http.ListenAndServe("localhost:6060", nil))
 	// }()
