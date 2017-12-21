@@ -63,9 +63,9 @@ func (c *Stream) notifyCodeError(code byte) error {
 	switch code {
 	case notifyExit:
 		if (c.options & OptErrWhenClosed) > 0 {
-			return io.EOF
+			return ErrConnClosed
 		}
-		return ErrConnClosed
+		return io.EOF
 	case notifyCancel:
 		return &timeoutError{}
 	default:
@@ -163,6 +163,9 @@ func (c *Stream) Write(buf []byte) (n int, err error) {
 		case cmdErr:
 			return 0, errors.New("write: remote returns an error")
 		case cmdClose:
+			if (c.options & OptErrWhenClosed) > 0 {
+				return 0, ErrConnClosed
+			}
 			return len(buf), nil //ErrConnClosed
 		}
 	case code := <-c.writeExit:

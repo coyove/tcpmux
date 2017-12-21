@@ -65,17 +65,20 @@ func closeWhenWrite(flag bool) {
 }
 
 func TestHTTPServerConnClosed(t *testing.T) {
-	go func() {
-		ln := getListerner()
+	var ln net.Listener
 
-		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	go func() {
+		ln = getListerner()
+
+		mux := http.NewServeMux()
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			h := w.(http.Hijacker)
 			conn, _, _ := h.Hijack()
 			conn.Write([]byte("HTTP/1.1 200 OK\r\n\r\n"))
 			conn.Close()
 		})
 
-		http.Serve(ln, nil)
+		http.Serve(ln, mux)
 	}()
 
 	num := 10
@@ -130,6 +133,8 @@ func TestHTTPServerConnClosed(t *testing.T) {
 
 		wg.Wait()
 	}
+
+	ln.Close()
 
 	// This test should be finished in either 1 second or 3 seconds:
 	// 1 sec: net.Conn was closed and we immediately know it

@@ -25,7 +25,7 @@ func randomString() string {
 }
 
 // go test -v -timeout 20m
-func zTestHTTPServer(t *testing.T) {
+func TestHTTPServer(t *testing.T) {
 	// go func() {
 	// 	log.Println(http.ListenAndServe("localhost:6060", nil))
 	// }()
@@ -33,7 +33,8 @@ func zTestHTTPServer(t *testing.T) {
 	go func() {
 		ln := getListerner()
 
-		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			// http library tend to reuse the conn, but in this test we don't
 			h := w.(http.Hijacker)
 			conn, _, _ := h.Hijack()
@@ -41,13 +42,8 @@ func zTestHTTPServer(t *testing.T) {
 			res := fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n", len(r.RequestURI[1:]))
 			conn.Write([]byte(res + r.RequestURI[1:]))
 			conn.Close()
-			// n, err := conn.Read(buf)
-			// if err == nil {
-			// 	logg.D(buf[:n])
-			// }
-			// w.Write([]byte(r.RequestURI[1:]))
 		})
-		http.Serve(ln, nil)
+		http.Serve(ln, mux)
 	}()
 
 	num := 100
@@ -106,7 +102,6 @@ func zTestHTTPServer(t *testing.T) {
 		wg := &sync.WaitGroup{}
 
 		// start := time.Now()
-		//streamMapping = make(map[uint32]*tcpmux.Stream)
 		for i := 0; i < num*10; i++ {
 			wg.Add(1)
 			go test(wg)
