@@ -42,6 +42,9 @@ var (
 
 	// ErrStreamLost is returned when a Dial failed
 	ErrStreamLost = errors.New("dial: no answer from the remote")
+
+	// ErrTooManyTries is returned when a Dial tried too many times
+	ErrTooManyTries = errors.New("dial: too many tries of finding a valid conn")
 )
 
 func makeFrame(idx uint32, cmd byte, payload []byte) []byte {
@@ -103,20 +106,6 @@ func (sm *Map32) Store(id uint32, v interface{}) {
 	sm.Lock()
 	sm.m[id] = (*[2]unsafe.Pointer)(unsafe.Pointer(&v))[1]
 	sm.Unlock()
-}
-
-// Push stores the value if the total size of the map is under "uplimit"
-func (sm *Map32) Push(id uint32, v interface{}, uplimit int) unsafe.Pointer {
-	sm.Lock()
-	if len(sm.m) < uplimit {
-		p := (*[2]unsafe.Pointer)(unsafe.Pointer(&v))[1]
-		sm.m[id] = p
-		sm.Unlock()
-		return p
-	}
-
-	sm.Unlock()
-	return nil
 }
 
 func (sm *Map32) Delete(ids ...uint32) {

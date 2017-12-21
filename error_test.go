@@ -2,14 +2,12 @@ package tcpmux
 
 import (
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"strings"
 	"sync"
 	"testing"
 	"time"
-	"unsafe"
 )
 
 func TestTCPServerCloseWhenWrite(t *testing.T) {
@@ -73,96 +71,97 @@ func (c *testConnReadHook) Read(buf []byte) (int, error) {
 	return c.read(buf)
 }
 
-func TestTCPServerCloseMaster(t *testing.T) {
-	ready := make(chan bool)
-	exit := false
+// func TestTCPServerCloseMaster(t *testing.T) {
+// 	ready := make(chan bool)
+// 	exit := false
 
-	var ln net.Listener
-	go func() {
-		ln = getListerner()
-		ready <- true
+// 	var ln net.Listener
+// 	go func() {
+// 		ln = getListerner()
+// 		ready <- true
 
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				break
-			}
+// 		for {
+// 			conn, err := ln.Accept()
+// 			if err != nil {
+// 				break
+// 			}
 
-			go func() {
-				buf := make([]byte, 40)
-				n, err := conn.Read(buf)
-				if err != nil {
-					t.Log("closeMaster:", err)
-				}
+// 			go func() {
+// 				buf := make([]byte, 40)
+// 				n, err := conn.Read(buf)
+// 				if err != nil {
+// 					t.Log("closeMaster:", err)
+// 				}
 
-				conn.Write(buf[:n])
-				conn.Close()
-			}()
-		}
-	}()
+// 				conn.Write(buf[:n])
+// 				conn.Close()
+// 			}()
+// 		}
+// 	}()
 
-	select {
-	case <-ready:
-	}
+// 	select {
+// 	case <-ready:
+// 	}
 
-	d := NewDialer("127.0.0.1:13739", 10)
+// 	d := NewDialer("127.0.0.1:13739", 10)
 
-	go func() {
-		time.Sleep(time.Second)
-		// count, _ := d.Count()
-		conns := make([]*connState, 0, d.conns.Len())
+// 	go func() {
+// 		time.Sleep(time.Second)
+// 		// count, _ := d.Count()
+// 		conns := make([]*connState, 0, d.conns.Len())
 
-		// can't do it in iteration, deadlock
-		d.conns.IterateConst(func(id uint32, p unsafe.Pointer) bool {
-			conns = append(conns, (*connState)(p))
-			return true
-		})
+// 		// can't do it in iteration, deadlock
+// 		d.conns.IterateConst(func(id uint32, p unsafe.Pointer) bool {
+// 			conns = append(conns, (*connState)(p))
+// 			return true
+// 		})
 
-		for _, conn := range conns {
-			conn.stop()
-		}
+// 		for _, conn := range conns {
+// 			conn.stop()
+// 		}
 
-		time.Sleep(time.Second)
-		log.Println(d.Count())
-	}()
+// 		time.Sleep(time.Second)
+// 		log.Println(d.Count())
+// 	}()
 
-	for !exit {
-		wg := sync.WaitGroup{}
-		for i := 0; i < 1000; i++ {
-			wg.Add(1)
-			go func(i int) {
-				defer func() { wg.Done() }()
+// 	for !exit {
+// 		wg := sync.WaitGroup{}
+// 		for i := 0; i < 1000; i++ {
+// 			wg.Add(1)
+// 			go func(i int) {
+// 				defer func() { wg.Done() }()
 
-				conn, err := d.Dial()
-				if err != nil {
-					t.Log("closeMaster:", err)
-					exit = true
-					return
-				}
+// 				conn, err := d.Dial()
+// 				if err != nil {
+// 					t.Log("closeMaster:", err)
+// 					exit = true
+// 					return
+// 				}
 
-				str := randomString()
-				_, err = conn.Write([]byte(str))
-				if err != nil {
-					t.Log("closeMaster:", err)
-					exit = true
-					return
-				}
+// 				time.Sleep(100 * time.Millisecond)
+// 				str := randomString()
+// 				_, err = conn.Write([]byte(str))
+// 				if err != nil {
+// 					t.Log("closeMaster:", err)
+// 					exit = true
+// 					return
+// 				}
 
-				conn.Close()
-			}(i)
-		}
-		wg.Wait()
-	}
+// 				conn.Close()
+// 			}(i)
+// 		}
+// 		wg.Wait()
+// 	}
 
-	ln.Close()
-}
+// 	ln.Close()
+// }
 
 func TestHTTPServerConnClosed(t *testing.T) {
 	var ln net.Listener
-
+	ready := make(chan bool)
 	go func() {
 		ln = getListerner()
-
+		ready <- true
 		mux := http.NewServeMux()
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			h := w.(http.Hijacker)
@@ -173,6 +172,10 @@ func TestHTTPServerConnClosed(t *testing.T) {
 
 		http.Serve(ln, mux)
 	}()
+
+	select {
+	case <-ready:
+	}
 
 	num := 10
 	p := NewDialer("127.0.0.1:13739", num)

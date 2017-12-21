@@ -1,7 +1,6 @@
 package tcpmux
 
 import (
-	"errors"
 	"math/rand"
 	"net"
 	"sync"
@@ -41,10 +40,12 @@ func (d *DialPool) GetConns() *Map32 {
 	return &d.conns
 }
 
+// Dial connects to the address stored in the DialPool.
 func (d *DialPool) Dial() (net.Conn, error) {
 	return d.DialTimeout(0)
 }
 
+// DialTimeout acts like Dial but takes a timeout.
 func (d *DialPool) DialTimeout(timeout time.Duration) (net.Conn, error) {
 	if d.maxConns == 0 {
 		return net.DialTimeout("tcp", d.address, timeout)
@@ -79,9 +80,10 @@ func (d *DialPool) DialTimeout(timeout time.Duration) (net.Conn, error) {
 		return s, nil
 	}
 
-	// not thread-safe, maybe we will have connections more than maxConns
-	if d.conns.Len() < d.maxConns {
+	d.Lock()
+	if len(d.conns.m) < d.maxConns {
 		c := &connState{
+			idx:           atomic.AddUint32(&d.connsCtr, 1),
 			exitRead:      make(chan bool),
 			streams:       Map32{}.New(),
 			master:        d.conns,
@@ -90,9 +92,8 @@ func (d *DialPool) DialTimeout(timeout time.Duration) (net.Conn, error) {
 		}
 		c.address, _ = net.ResolveTCPAddr("tcp", d.address)
 
-		ctr := atomic.AddUint32(&d.connsCtr, 1)
-		c.idx = ctr
-		d.conns.Store(ctr, c)
+		d.conns.m[c.idx] = unsafe.Pointer(c)
+		d.Unlock()
 
 		var conn net.Conn
 		var err error
@@ -102,7 +103,7 @@ func (d *DialPool) DialTimeout(timeout time.Duration) (net.Conn, error) {
 			conn, err = testDialHook("tcp", d.address, timeout)
 		}
 		if err != nil {
-			d.conns.Delete(ctr)
+			d.conns.Delete(c.idx)
 			return nil, err
 		}
 
@@ -114,6 +115,7 @@ func (d *DialPool) DialTimeout(timeout time.Duration) (net.Conn, error) {
 
 		return newStreamAndSayHello(c)
 	}
+	d.Unlock()
 
 	conn := (*connState)(nil)
 	for try := 0; conn == nil || conn.conn == nil; try++ {
@@ -131,7 +133,7 @@ func (d *DialPool) DialTimeout(timeout time.Duration) (net.Conn, error) {
 		})
 
 		if try > 1e6 && d.ErrorCallback != nil {
-			d.ErrorCallback(errors.New("dial: too many tries of finding a valid conn"))
+			d.ErrorCallback(ErrTooManyTries)
 		}
 	}
 
