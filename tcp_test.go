@@ -1,4 +1,4 @@
-package main
+package tcpmux
 
 import (
 	"encoding/binary"
@@ -7,12 +7,10 @@ import (
 	"net"
 	"sync"
 	"testing"
-
-	"github.com/coyove/tcpmux"
 )
 
 func getListerner() net.Listener {
-	ln, err := tcpmux.Listen(":13739", true)
+	ln, err := Listen(":13739", true)
 	if err != nil {
 		panic(err)
 	}
@@ -51,7 +49,7 @@ func TestTCPServer(t *testing.T) {
 	}
 
 	num := 1
-	d := tcpmux.NewDialer("127.0.0.1:13739", num)
+	d := NewDialer("127.0.0.1:13739", num)
 	conn, _ := d.Dial()
 	_, err := conn.Write([]byte(str))
 	if err != nil {
@@ -87,7 +85,7 @@ func stringTransfer(num, loop int, pool bool) {
 		if pool {
 			ln = getListerner()
 		} else {
-			ln, _ = tcpmux.Listen(":13739", false)
+			ln, _ = Listen(":13739", false)
 		}
 		ready <- true
 
@@ -137,7 +135,7 @@ func stringTransfer(num, loop int, pool bool) {
 	case <-ready:
 	}
 
-	d := tcpmux.NewDialer("127.0.0.1:13739", num)
+	d := NewDialer("127.0.0.1:13739", num)
 	var total, count int
 	if num == 0 {
 		if loop < 1000 {

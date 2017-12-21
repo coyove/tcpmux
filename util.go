@@ -12,6 +12,7 @@ const (
 	acceptStreamChanSize = 256
 	bufferSize           = 32*1024 - 1 // 0x7fff
 	streamTimeout        = 20
+	pingInterval         = 2
 	version              = 0x89
 )
 
@@ -102,6 +103,20 @@ func (sm *Map32) Store(id uint32, v interface{}) {
 	sm.Lock()
 	sm.m[id] = (*[2]unsafe.Pointer)(unsafe.Pointer(&v))[1]
 	sm.Unlock()
+}
+
+// Push stores the value if the total size of the map is under "uplimit"
+func (sm *Map32) Push(id uint32, v interface{}, uplimit int) unsafe.Pointer {
+	sm.Lock()
+	if len(sm.m) < uplimit {
+		p := (*[2]unsafe.Pointer)(unsafe.Pointer(&v))[1]
+		sm.m[id] = p
+		sm.Unlock()
+		return p
+	}
+
+	sm.Unlock()
+	return nil
 }
 
 func (sm *Map32) Delete(ids ...uint32) {

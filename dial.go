@@ -10,6 +10,8 @@ import (
 	"unsafe"
 )
 
+var testDialHook func(network, addr string, timeout time.Duration) (net.Conn, error)
+
 type DialPool struct {
 	sync.Mutex
 
@@ -83,6 +85,7 @@ func (d *DialPool) DialTimeout(timeout time.Duration) (net.Conn, error) {
 			exitRead:      make(chan bool),
 			streams:       Map32{}.New(),
 			master:        d.conns,
+			timeout:       streamTimeout,
 			ErrorCallback: d.ErrorCallback,
 		}
 		c.address, _ = net.ResolveTCPAddr("tcp", d.address)
@@ -91,13 +94,21 @@ func (d *DialPool) DialTimeout(timeout time.Duration) (net.Conn, error) {
 		c.idx = ctr
 		d.conns.Store(ctr, c)
 
-		conn, err := net.DialTimeout("tcp", d.address, timeout)
+		var conn net.Conn
+		var err error
+		if testDialHook == nil {
+			conn, err = net.DialTimeout("tcp", d.address, timeout)
+		} else {
+			conn, err = testDialHook("tcp", d.address, timeout)
+		}
 		if err != nil {
 			d.conns.Delete(ctr)
 			return nil, err
 		}
 
-		conn.(*net.TCPConn).SetNoDelay(true)
+		if t, _ := conn.(*net.TCPConn); t != nil {
+			t.SetNoDelay(true)
+		}
 		c.conn = conn
 		go c.start()
 

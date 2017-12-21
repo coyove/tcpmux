@@ -1,4 +1,4 @@
-package main
+package tcpmux
 
 import (
 	"fmt"
@@ -7,12 +7,11 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"runtime"
 	"runtime/pprof"
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/coyove/tcpmux"
 )
 
 func randomString() string {
@@ -30,9 +29,12 @@ func TestHTTPServer(t *testing.T) {
 	// 	log.Println(http.ListenAndServe("localhost:6060", nil))
 	// }()
 
-	go func() {
-		ln := getListerner()
+	ready := make(chan bool)
+	var ln net.Listener
 
+	go func() {
+		ln = getListerner()
+		ready <- true
 		mux := http.NewServeMux()
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			// http library tend to reuse the conn, but in this test we don't
@@ -47,15 +49,17 @@ func TestHTTPServer(t *testing.T) {
 	}()
 
 	num := 100
-	// streamMapping := make(map[uint32]*tcpmux.Stream)
-	// smLock := sync.Mutex{}
-	p := tcpmux.NewDialer("127.0.0.1:13739", num)
+	p := NewDialer("127.0.0.1:13739", num)
+
+	ewc := runtime.GOOS == "darwin"
 
 	client := http.Client{
 		Transport: &http.Transport{
 			Dial: func(network, addr string) (net.Conn, error) {
 				s, err := p.Dial()
-				s.(*tcpmux.Stream).SetStreamOpt(tcpmux.OptErrWhenClosed)
+				if !ewc && s != nil {
+					s.(*Stream).SetStreamOpt(OptErrWhenClosed)
+				}
 				return s, err
 			},
 		},
@@ -88,6 +92,10 @@ func TestHTTPServer(t *testing.T) {
 		wg.Done()
 	}
 
+	select {
+	case <-ready:
+	}
+
 	go func() {
 		for {
 			time.Sleep(2 * time.Second)
@@ -98,8 +106,13 @@ func TestHTTPServer(t *testing.T) {
 		}
 	}()
 
+	start := time.Now()
 	for {
 		wg := &sync.WaitGroup{}
+
+		if time.Now().Sub(start).Seconds() > 590 { // < 10 min, so we won't get killed by the go tester
+			break
+		}
 
 		// start := time.Now()
 		for i := 0; i < num*10; i++ {
@@ -112,5 +125,5 @@ func TestHTTPServer(t *testing.T) {
 		//logg.D(p.Count())
 	}
 
-	select {}
+	ln.Close()
 }

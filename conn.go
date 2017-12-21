@@ -26,6 +26,7 @@ type connState struct {
 	newStreamCallback func(state *readState)
 	ErrorCallback     func(error) bool
 
+	timeout int64
 	stopped bool
 	sync.Mutex
 }
@@ -50,7 +51,7 @@ func (cs *connState) start() {
 
 	go func() {
 		for {
-			time.Sleep(2 * time.Second)
+			time.Sleep(pingInterval * time.Second)
 
 			select {
 			case <-daemonChan:
@@ -85,6 +86,7 @@ func (cs *connState) start() {
 	for {
 		go func() {
 			buf := make([]byte, 7)
+			cs.conn.SetReadDeadline(time.Now().Add(time.Duration(cs.timeout) * time.Second))
 			_, err := io.ReadAtLeast(cs.conn, buf, 7)
 
 			if err != nil {

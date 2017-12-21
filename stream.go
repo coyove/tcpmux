@@ -210,9 +210,21 @@ func (c *Stream) Close() error {
 	return nil
 }
 
+// CloseMaster closes all streams under the same master net.Conn
+func (c *Stream) CloseMaster() error {
+	c.master.stop()
+	return nil
+}
+
 // SetTimeout sets the timeout for this stream, error range: 1 sec
 func (c *Stream) SetTimeout(sec int64) {
-	atomic.StoreInt64(&c.timeout, sec)
+	c.timeout = sec
+	c.master.timeout = sec
+}
+
+// SetMasterTimeout sets the timeout for this stream's net.Conn, error range: 1 sec
+func (c *Stream) SetMasterTimeout(sec int64) {
+	c.master.timeout = sec
 }
 
 // LocalAddr is a compatible method for net.Conn

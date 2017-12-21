@@ -1,15 +1,15 @@
-package main
+package tcpmux
 
 import (
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"strings"
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/coyove/tcpmux"
+	"unsafe"
 )
 
 func TestTCPServerCloseWhenWrite(t *testing.T) {
@@ -39,17 +39,17 @@ func closeWhenWrite(flag bool) {
 	case <-ready:
 	}
 
-	d := tcpmux.NewDialer("127.0.0.1:13739", 1)
+	d := NewDialer("127.0.0.1:13739", 1)
 	conn, _ := d.Dial()
 
 	if flag {
-		conn.(*tcpmux.Stream).SetStreamOpt(tcpmux.OptErrWhenClosed)
+		conn.(*Stream).SetStreamOpt(OptErrWhenClosed)
 	}
 
 	_, err := conn.Read([]byte{})
 
 	if flag {
-		if err != tcpmux.ErrConnClosed {
+		if err != ErrConnClosed {
 			panic(err)
 		}
 	} else {
@@ -62,6 +62,99 @@ func closeWhenWrite(flag bool) {
 	select {
 	case <-exit:
 	}
+}
+
+type testConnReadHook struct {
+	net.Conn
+	read func(buf []byte) (int, error)
+}
+
+func (c *testConnReadHook) Read(buf []byte) (int, error) {
+	return c.read(buf)
+}
+
+func TestTCPServerCloseMaster(t *testing.T) {
+	ready := make(chan bool)
+	exit := false
+
+	var ln net.Listener
+	go func() {
+		ln = getListerner()
+		ready <- true
+
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				break
+			}
+
+			go func() {
+				buf := make([]byte, 40)
+				n, err := conn.Read(buf)
+				if err != nil {
+					t.Log("closeMaster:", err)
+				}
+
+				conn.Write(buf[:n])
+				conn.Close()
+			}()
+		}
+	}()
+
+	select {
+	case <-ready:
+	}
+
+	d := NewDialer("127.0.0.1:13739", 10)
+
+	go func() {
+		time.Sleep(time.Second)
+		// count, _ := d.Count()
+		conns := make([]*connState, 0, d.conns.Len())
+
+		// can't do it in iteration, deadlock
+		d.conns.IterateConst(func(id uint32, p unsafe.Pointer) bool {
+			conns = append(conns, (*connState)(p))
+			return true
+		})
+
+		for _, conn := range conns {
+			conn.stop()
+		}
+
+		time.Sleep(time.Second)
+		log.Println(d.Count())
+	}()
+
+	for !exit {
+		wg := sync.WaitGroup{}
+		for i := 0; i < 1000; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer func() { wg.Done() }()
+
+				conn, err := d.Dial()
+				if err != nil {
+					t.Log("closeMaster:", err)
+					exit = true
+					return
+				}
+
+				str := randomString()
+				_, err = conn.Write([]byte(str))
+				if err != nil {
+					t.Log("closeMaster:", err)
+					exit = true
+					return
+				}
+
+				conn.Close()
+			}(i)
+		}
+		wg.Wait()
+	}
+
+	ln.Close()
 }
 
 func TestHTTPServerConnClosed(t *testing.T) {
@@ -82,15 +175,15 @@ func TestHTTPServerConnClosed(t *testing.T) {
 	}()
 
 	num := 10
-	p := tcpmux.NewDialer("127.0.0.1:13739", num)
+	p := NewDialer("127.0.0.1:13739", num)
 
 	client := http.Client{
 		Transport: &http.Transport{
 			Dial: func(network, addr string) (net.Conn, error) {
 				s, err := p.Dial()
 				if err == nil {
-					s.(*tcpmux.Stream).SetStreamOpt(tcpmux.OptErrWhenClosed)
-					s.(*tcpmux.Stream).SetTimeout(2)
+					s.(*Stream).SetStreamOpt(OptErrWhenClosed)
+					s.(*Stream).SetTimeout(2)
 				}
 				return s, err
 			},
@@ -104,7 +197,7 @@ func TestHTTPServerConnClosed(t *testing.T) {
 
 		if err != nil {
 			if ne, _ := err.(net.Error); (ne != nil && ne.Timeout()) ||
-				strings.Contains(err.Error(), tcpmux.ErrConnClosed.Error()) {
+				strings.Contains(err.Error(), ErrConnClosed.Error()) {
 				exit = true
 			} else {
 				panic(err)

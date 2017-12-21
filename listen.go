@@ -72,6 +72,7 @@ func (l *ListenPool) accept() {
 				conn:          conn,
 				master:        l.conns,
 				exitRead:      make(chan bool),
+				timeout:       streamTimeout,
 				streams:       Map32{}.New(),
 				newStreamCallback: func(state *readState) {
 					idx := state.idx
