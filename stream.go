@@ -93,8 +93,13 @@ func (c *Stream) Read(buf []byte) (n int, err error) {
 
 	atomic.StoreInt64(&c.lastActive, time.Now().UnixNano())
 
+REPEAT:
 	select {
 	case x := <-c.readResp:
+		if x.cmd == cmdAck {
+			goto REPEAT
+		}
+
 		if x.cmd == cmdClose {
 			if (c.options & OptErrWhenClosed) > 0 {
 				return 0, ErrConnClosed
@@ -112,6 +117,10 @@ func (c *Stream) Read(buf []byte) (n int, err error) {
 			}
 
 			copy(buf, xbuf)
+		}
+
+		if x.err != nil {
+			n = 0
 		}
 
 		c.lastResp = x

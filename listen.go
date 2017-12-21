@@ -33,6 +33,10 @@ func Listen(addr string, pooling bool) (net.Listener, error) {
 		return ln, err
 	}
 
+	return Wrap(ln), nil
+}
+
+func Wrap(ln net.Listener) net.Listener {
 	lp := &ListenPool{
 		ln:        ln,
 		exit:      make(chan bool, 1),
@@ -45,7 +49,7 @@ func Listen(addr string, pooling bool) (net.Listener, error) {
 	}
 
 	go lp.accept()
-	return lp, nil
+	return lp
 }
 
 func (l *ListenPool) accept() {

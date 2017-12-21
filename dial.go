@@ -35,6 +35,10 @@ func NewDialer(addr string, poolSize int) *DialPool {
 	return dp
 }
 
+func (d *DialPool) GetConns() *Map32 {
+	return &d.conns
+}
+
 func (d *DialPool) Dial() (net.Conn, error) {
 	return d.DialTimeout(0)
 }

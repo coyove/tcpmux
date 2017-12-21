@@ -12,6 +12,8 @@ import (
 )
 
 type connState struct {
+	conn net.Conn
+
 	address *net.TCPAddr
 
 	master  Map32
@@ -19,7 +21,6 @@ type connState struct {
 
 	idx uint32
 
-	conn     net.Conn
 	exitRead chan bool
 
 	newStreamCallback func(state *readState)
@@ -83,9 +84,9 @@ func (cs *connState) start() {
 
 	for {
 		go func() {
-
 			buf := make([]byte, 7)
 			_, err := io.ReadAtLeast(cs.conn, buf, 7)
+
 			if err != nil {
 				cs.broadcast(err)
 				return
@@ -128,8 +129,6 @@ func (cs *connState) start() {
 						default:
 						}
 					}
-					// If it is an invalid index, we do nothing to prevent infinite loop, next time the sender writes,
-					// he won't receive any confirmation, so he knows the receiver is dead
 				}
 
 				readChan <- true
