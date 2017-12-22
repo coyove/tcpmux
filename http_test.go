@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"runtime"
 	"runtime/pprof"
 	"sync"
 	"testing"
@@ -50,16 +49,15 @@ func TestHTTPServer(t *testing.T) {
 
 	num := 100
 	p := NewDialer("127.0.0.1:13739", num)
-
-	ewc := runtime.GOOS == "darwin"
-
 	client := http.Client{
 		Transport: &http.Transport{
 			Dial: func(network, addr string) (net.Conn, error) {
 				s, err := p.Dial()
-				if !ewc && s != nil {
-					s.(*Stream).SetStreamOpt(OptErrWhenClosed)
-				}
+				// If we don't set OptErrWhenClosed,
+				// for reading from a closed conn, we return (0, io.EOF)
+				// for writing to a closed conn, we return (length of buf, nil)
+
+				// s.(*Stream).SetStreamOpt(OptErrWhenClosed)
 				return s, err
 			},
 		},

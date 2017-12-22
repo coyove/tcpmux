@@ -1,12 +1,13 @@
 package tcpmux
 
 import (
-	"math/rand"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
+
+	"github.com/coyove/goflyway/pkg/rand"
 )
 
 var testDialHook func(network, addr string, timeout time.Duration) (net.Conn, error)
@@ -22,12 +23,15 @@ type DialPool struct {
 	connsCtr  uint32
 	streamCtr uint32
 
+	r *rand.ConcurrentRand
+
 	ErrorCallback func(error) bool
 }
 
 // NewDialer creates a new DialPool, set poolSize to 0 to disable pooling
 func NewDialer(addr string, poolSize int) *DialPool {
 	dp := &DialPool{
+		r:        rand.New(),
 		address:  addr,
 		maxConns: poolSize,
 		conns:    Map32{}.New(),
@@ -36,6 +40,7 @@ func NewDialer(addr string, poolSize int) *DialPool {
 	return dp
 }
 
+// GetConns returns the low-level TCP connections
 func (d *DialPool) GetConns() *Map32 {
 	return &d.conns
 }
@@ -69,11 +74,22 @@ func (d *DialPool) DialTimeout(timeout time.Duration) (net.Conn, error) {
 			return nil, err
 		}
 
-		// after sending the hello, we wait for the ack
-		select {
-		case resp := <-s.writeStateResp:
-			if resp != cmdAck {
-				return nil, ErrStreamLost
+		// After sending the hello, we wait for the ack, or timed out
+		if timeout != 0 {
+			select {
+			case resp := <-s.writeStateResp:
+				if resp != cmdAck {
+					return nil, ErrStreamLost
+				}
+			case <-time.After(timeout):
+				return nil, &timeoutError{}
+			}
+		} else {
+			select {
+			case resp := <-s.writeStateResp:
+				if resp != cmdAck {
+					return nil, ErrStreamLost
+				}
 			}
 		}
 
@@ -90,7 +106,6 @@ func (d *DialPool) DialTimeout(timeout time.Duration) (net.Conn, error) {
 			timeout:       streamTimeout,
 			ErrorCallback: d.ErrorCallback,
 		}
-		c.address, _ = net.ResolveTCPAddr("tcp", d.address)
 
 		d.conns.m[c.idx] = unsafe.Pointer(c)
 		d.Unlock()
@@ -121,10 +136,9 @@ func (d *DialPool) DialTimeout(timeout time.Duration) (net.Conn, error) {
 	for try := 0; conn == nil || conn.conn == nil; try++ {
 		i, ln := 0, d.conns.Len()
 
-		// ln may change
 		d.conns.IterateConst(func(id uint32, p unsafe.Pointer) bool {
 			conn = (*connState)(p)
-			if ln-i > 0 && rand.Intn(ln-i) == 0 && conn.conn != nil {
+			if ln-i > 0 && d.r.Intn(ln-i) == 0 && conn.conn != nil {
 				// break
 				return false
 			}

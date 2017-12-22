@@ -2,6 +2,7 @@ package tcpmux
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"sync/atomic"
@@ -141,6 +142,10 @@ func (c *Stream) Write(buf []byte) (n int, err error) {
 		return len(buf), nil
 	}
 
+	if len(buf) > bufferSize {
+		return 0, fmt.Errorf("the buffer is larger than %d, try splitting it into smaller ones", bufferSize)
+	}
+
 	writeChan := make(chan bool, 1)
 	go func() {
 		n, err = c.master.conn.Write(makeFrame(c.streamIdx, 0, buf))
@@ -228,10 +233,10 @@ func (c *Stream) SetMasterTimeout(sec int64) {
 }
 
 // LocalAddr is a compatible method for net.Conn
-func (c *Stream) LocalAddr() net.Addr { return &net.TCPAddr{} }
+func (c *Stream) LocalAddr() net.Addr { return c.master.conn.LocalAddr() }
 
 // RemoteAddr is a compatible method for net.Conn
-func (c *Stream) RemoteAddr() net.Addr { return c.master.address }
+func (c *Stream) RemoteAddr() net.Addr { return c.master.conn.RemoteAddr() }
 
 // SetReadDeadline is a compatible method for net.Conn
 func (c *Stream) SetReadDeadline(t time.Time) error {

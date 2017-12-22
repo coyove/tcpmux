@@ -7,16 +7,17 @@ import (
 	"unsafe"
 )
 
+// Version is the header version, can be changed before Dial() or Listen()
+var Version byte = 0x89
+
 const (
 	readRespChanSize     = 256
 	acceptStreamChanSize = 256
-	bufferSize           = 32*1024 - 1 // 0x7fff
-	streamTimeout        = 20
-	pingInterval         = 2
-	version              = 0x89
+	bufferSize           = 32 * 1024 // 0x8000
+	streamTimeout        = 20        // seconds
+	pingInterval         = 2         // seconds
+	cmdByte              = 0xff
 )
-
-const cmdByte = 0xff
 
 const (
 	cmdHello = iota + 1
@@ -49,7 +50,7 @@ var (
 
 func makeFrame(idx uint32, cmd byte, payload []byte) []byte {
 	if cmd != 0 {
-		buf := []byte{version, 0, 0, 0, 0, cmdByte, cmd}
+		buf := []byte{Version, 0, 0, 0, 0, cmdByte, cmd}
 		binary.BigEndian.PutUint32(buf[1:], idx)
 		return buf
 	}
@@ -57,7 +58,7 @@ func makeFrame(idx uint32, cmd byte, payload []byte) []byte {
 	header := make([]byte, 7+len(payload))
 	binary.BigEndian.PutUint32(header[1:], uint32(idx))
 	binary.BigEndian.PutUint16(header[5:], uint16(len(payload)))
-	header[0] = version
+	header[0] = Version
 	copy(header[7:], payload)
 	return header
 }
@@ -91,10 +92,12 @@ type Map32 struct {
 	m map[uint32]unsafe.Pointer
 }
 
+// New creates a new Map32
 func (Map32) New() Map32 {
 	return Map32{RWMutex: new(sync.RWMutex), m: make(map[uint32]unsafe.Pointer)}
 }
 
+// Clear clears all entries
 func (sm *Map32) Clear() {
 	sm.Lock()
 	sm.m = make(map[uint32]unsafe.Pointer)
@@ -108,6 +111,7 @@ func (sm *Map32) Store(id uint32, v interface{}) {
 	sm.Unlock()
 }
 
+// Delete deletes multiple entries by ids
 func (sm *Map32) Delete(ids ...uint32) {
 	sm.Lock()
 	for _, id := range ids {
@@ -116,6 +120,7 @@ func (sm *Map32) Delete(ids ...uint32) {
 	sm.Unlock()
 }
 
+// Load returns the entry by id
 func (sm *Map32) Load(id uint32) (unsafe.Pointer, bool) {
 	sm.RLock()
 	s, ok := sm.m[id]
@@ -123,7 +128,7 @@ func (sm *Map32) Load(id uint32) (unsafe.Pointer, bool) {
 	return s, ok
 }
 
-// Fetch fetches the pointer and delete it from the map
+// Fetch returns the entry after removing it from the map
 func (sm *Map32) Fetch(id uint32) (unsafe.Pointer, bool) {
 	sm.Lock()
 	s, ok := sm.m[id]
@@ -132,6 +137,7 @@ func (sm *Map32) Fetch(id uint32) (unsafe.Pointer, bool) {
 	return s, ok
 }
 
+// First returns the first entry
 func (sm *Map32) First() (s unsafe.Pointer) {
 	sm.RLock()
 	for _, s = range sm.m {
@@ -141,6 +147,7 @@ func (sm *Map32) First() (s unsafe.Pointer) {
 	return
 }
 
+// Len returns the total number of entries
 func (sm *Map32) Len() int {
 	sm.RLock()
 	ln := len(sm.m)

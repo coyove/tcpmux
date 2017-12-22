@@ -14,8 +14,6 @@ import (
 type connState struct {
 	conn net.Conn
 
-	address *net.TCPAddr
-
 	master  Map32
 	streams Map32
 
@@ -58,6 +56,8 @@ func (cs *connState) start() {
 				return
 			default:
 				now := time.Now().UnixNano()
+
+				// Garbage collect all closed and/or inactive streams
 				cs.streams.Iterate(func(idx uint32, p unsafe.Pointer) bool {
 					s := (*Stream)(p)
 					if s.closed.Load().(bool) {
@@ -74,7 +74,8 @@ func (cs *connState) start() {
 					s.notifyWrite(notifyCancel)
 					return false
 				})
-				//logg.D(">>>>>>", cs.streams.Len())
+
+				// Send ping
 				if _, err := cs.conn.Write(makeFrame(0, cmdPing, nil)); err != nil {
 					cs.broadcast(err)
 					return
@@ -86,6 +87,8 @@ func (cs *connState) start() {
 	for {
 		go func() {
 			buf := make([]byte, 7)
+
+			// Normally we have pings so this deadline shall never be met
 			cs.conn.SetReadDeadline(time.Now().Add(time.Duration(cs.timeout) * time.Second))
 			_, err := io.ReadAtLeast(cs.conn, buf, 7)
 
@@ -94,7 +97,7 @@ func (cs *connState) start() {
 				return
 			}
 
-			if buf[0] != version {
+			if buf[0] != Version {
 				cs.broadcast(errors.New("fatal: invalid header received"))
 				return
 			}
@@ -102,13 +105,14 @@ func (cs *connState) start() {
 			streamIdx := binary.BigEndian.Uint32(buf[1:])
 			streamLen := int(binary.BigEndian.Uint16(buf[5:]))
 
-			if buf[5] == cmdByte {
+			if buf[5] == cmdByte && buf[6] != 0 {
 				switch buf[6] {
 				case cmdHello:
+					// The stream will be added into connState in this callback
 					cs.newStreamCallback(&readState{idx: streamIdx})
 
 					buf[5], buf[6] = cmdByte, cmdAck
-					// we acknowledge the hello
+					// We acknowledge the hello
 					if _, err = cs.conn.Write(buf); err != nil {
 						cs.broadcast(err)
 						return
@@ -177,7 +181,7 @@ func (cs *connState) start() {
 }
 
 // Even all streams are closed, the conn will still not be removed from the master.
-// It gets removed only if it encountered an error, and stop() was called.
+// It gets removed only if it encountered an error, and stop() was called, or any one of its streams called CloseMaster()
 func (cs *connState) stop() {
 	cs.Lock()
 	if cs.stopped {
