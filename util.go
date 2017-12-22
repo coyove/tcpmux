@@ -46,6 +46,9 @@ var (
 
 	// ErrTooManyTries is returned when a Dial tried too many times
 	ErrTooManyTries = errors.New("dial: too many tries of finding a valid conn")
+
+	// ErrInvalidVerHdr is returned when the stream doesn't start with a valid version
+	ErrInvalidVerHdr = errors.New("fatal: invalid header received")
 )
 
 func makeFrame(idx uint32, cmd byte, payload []byte) []byte {

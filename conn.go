@@ -2,7 +2,6 @@ package tcpmux
 
 import (
 	"encoding/binary"
-	"errors"
 	"io"
 	"net"
 	"sync"
@@ -98,7 +97,7 @@ func (cs *connState) start() {
 			}
 
 			if buf[0] != Version {
-				cs.broadcast(errors.New("fatal: invalid header received"))
+				cs.broadcast(ErrInvalidVerHdr)
 				return
 			}
 
