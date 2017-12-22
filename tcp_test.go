@@ -3,8 +3,10 @@ package tcpmux
 import (
 	"encoding/binary"
 	"fmt"
+	"io/ioutil"
 	"math/rand"
 	"net"
+	"net/http"
 	"sync"
 	"testing"
 )
@@ -67,12 +69,28 @@ func TestTCPServerMultiWrite(t *testing.T) {
 	stringTransfer(rand.Intn(10)+10, 100000, true)
 }
 
+func BenchmarkTCPServerMuxMultiWrite20(b *testing.B) {
+	stringTransfer(20, b.N, true)
+}
+
 func BenchmarkTCPServerMuxMultiWrite10(b *testing.B) {
 	stringTransfer(10, b.N, true)
 }
 
-func BenchmarkTCPServerMultiWrite10(b *testing.B) {
+func BenchmarkTCPServerMuxMultiWrite2(b *testing.B) {
+	stringTransfer(2, b.N, true)
+}
+
+func BenchmarkTCPServerMuxMultiWrite1(b *testing.B) {
+	stringTransfer(1, b.N, true)
+}
+
+func BenchmarkTCPServerMultiWrite(b *testing.B) {
 	stringTransfer(0, b.N, false)
+}
+
+func BenchmarkHTTPServerMultiWrite(b *testing.B) {
+	httpPoolStringTransfer(b.N)
 }
 
 func stringTransfer(num, loop int, pool bool) {
@@ -155,7 +173,11 @@ func stringTransfer(num, loop int, pool bool) {
 		for i := 0; i < count; i++ {
 			wg.Add(1)
 			go func(i int) {
-				conn, _ := d.Dial()
+				conn, err := d.Dial()
+				if err != nil {
+					panic(err)
+				}
+
 				str := randomString()
 				strLock.Lock()
 				strMap[i] = str
@@ -165,7 +187,7 @@ func stringTransfer(num, loop int, pool bool) {
 				binary.BigEndian.PutUint32(buf, uint32(i))
 				binary.BigEndian.PutUint32(buf[4:], uint32(len(str)))
 
-				_, err := conn.Write(buf)
+				_, err = conn.Write(buf)
 				if err != nil {
 					panic(err)
 				}
@@ -179,4 +201,62 @@ func stringTransfer(num, loop int, pool bool) {
 	select {
 	case <-exit:
 	}
+}
+
+func httpPoolStringTransfer(loop int) {
+	ready := make(chan bool)
+
+	var ln net.Listener
+	go func() {
+		mux := http.NewServeMux()
+		ln, _ = net.Listen("tcp", ":13739")
+		ready <- true
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte(r.RequestURI[1:]))
+		})
+
+		http.Serve(ln, mux)
+	}()
+
+	select {
+	case <-ready:
+	}
+
+	client := &http.Client{}
+
+	var total, count int
+	if loop < 1000 {
+		count = loop
+		total = 1
+	} else {
+		count = 1000
+		total = loop / count
+	}
+
+	for n := 0; n < total; n++ {
+		wg := sync.WaitGroup{}
+		for i := 0; i < count; i++ {
+			wg.Add(1)
+			go func(i int) {
+				str := randomString()
+
+				req, _ := http.NewRequest("GET", "http://127.0.0.1:13739/"+str, nil)
+
+				resp, err := client.Do(req)
+				if err != nil {
+					panic(err)
+				}
+
+				buf, _ := ioutil.ReadAll(resp.Body)
+				if string(buf) != str {
+					panic(string(buf))
+				}
+				resp.Body.Close()
+				wg.Done()
+			}(i)
+		}
+		wg.Wait()
+	}
+
+	ln.Close()
 }
