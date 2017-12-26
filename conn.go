@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"io"
 	"net"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -200,4 +201,50 @@ func (cs *connState) stop() {
 
 	cs.stopped = true
 	cs.Unlock()
+}
+
+// Conn can prefetch one byte from net.Conn before Read()
+type Conn struct {
+	data  uintptr
+	len   int
+	cap   int
+	first byte
+	err   error
+
+	net.Conn
+}
+
+func (c *Conn) FirstByte() (b byte, err error) {
+	var n int
+
+	c.data = uintptr(unsafe.Pointer(c)) + strconv.IntSize/8*3
+	c.len = 1
+	c.cap = 1
+
+	n, err = c.Conn.Read(*(*[]byte)(unsafe.Pointer(c)))
+	c.err = err
+
+	if n == 1 {
+		b = c.first
+	}
+
+	return
+}
+
+func (c *Conn) Read(p []byte) (int, error) {
+	if c.err != nil {
+		return 0, c.err
+	}
+
+	if c.len == 1 {
+		p[0] = c.first
+		xp := p[1:]
+
+		n, err := c.Conn.Read(xp)
+		c.len = 0
+
+		return n + 1, err
+	}
+
+	return c.Conn.Read(p)
 }
