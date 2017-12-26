@@ -96,7 +96,7 @@ func (d *DialPool) DialTimeout(timeout time.Duration) (net.Conn, error) {
 		return s, nil
 	}
 
-	d.Lock()
+	d.conns.Lock()
 	if len(d.conns.m) < d.maxConns {
 		c := &connState{
 			idx:           atomic.AddUint32(&d.connsCtr, 1),
@@ -108,7 +108,7 @@ func (d *DialPool) DialTimeout(timeout time.Duration) (net.Conn, error) {
 		}
 
 		d.conns.m[c.idx] = unsafe.Pointer(c)
-		d.Unlock()
+		d.conns.Unlock()
 
 		var conn net.Conn
 		var err error
@@ -130,7 +130,7 @@ func (d *DialPool) DialTimeout(timeout time.Duration) (net.Conn, error) {
 
 		return newStreamAndSayHello(c)
 	}
-	d.Unlock()
+	d.conns.Unlock()
 
 	conn := (*connState)(nil)
 	for try := 0; conn == nil || conn.conn == nil; try++ {
