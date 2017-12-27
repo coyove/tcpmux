@@ -92,7 +92,7 @@ func (c *Stream) Read(buf []byte) (n int, err error) {
 		return
 	}
 
-	atomic.StoreInt64(&c.lastActive, time.Now().UnixNano())
+	c.lastActive = time.Now().UnixNano()
 
 REPEAT:
 	select {
@@ -129,7 +129,7 @@ REPEAT:
 		return 0, c.notifyCodeError(code)
 	}
 
-	atomic.StoreInt64(&c.lastActive, time.Now().UnixNano())
+	c.lastActive = time.Now().UnixNano()
 	return
 }
 
@@ -161,7 +161,7 @@ func (c *Stream) Write(buf []byte) (n int, err error) {
 		return 0, c.notifyCodeError(code)
 	}
 
-	atomic.StoreInt64(&c.lastActive, time.Now().UnixNano())
+	c.lastActive = time.Now().UnixNano()
 	select {
 	case cmd := <-c.writeStateResp:
 		switch cmd {
@@ -178,7 +178,7 @@ func (c *Stream) Write(buf []byte) (n int, err error) {
 	default:
 	}
 
-	atomic.StoreInt64(&c.lastActive, time.Now().UnixNano())
+	c.lastActive = time.Now().UnixNano()
 	n -= 7
 	return
 }
