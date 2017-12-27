@@ -6,7 +6,6 @@ import (
 	"net"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 	"unsafe"
 )
@@ -66,7 +65,7 @@ func (cs *connState) start() {
 					}
 
 					// TODO
-					if to := atomic.LoadInt64(&s.timeout); to > 0 && (now-s.lastActive)/1e9 <= to {
+					if to := s.timeout; to > 0 && (now-s.lastActive)/1e9 <= to {
 						return true
 					}
 
