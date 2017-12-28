@@ -242,7 +242,6 @@ func (c *Stream) RemoteAddr() net.Addr { return c.master.conn.RemoteAddr() }
 func (c *Stream) SetReadDeadline(t time.Time) error {
 	// Usually a time.Time{} is used for clearing the deadline
 	// But we must have an internal timeout, so ignore it
-
 	if t.IsZero() {
 		clearCancel(c.readExit)
 		return nil

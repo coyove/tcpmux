@@ -88,7 +88,7 @@ func (cs *connState) start() {
 			buf := make([]byte, 7)
 
 			// Normally we have pings so this deadline shall never be met
-			cs.conn.SetReadDeadline(time.Now().Add(time.Duration(cs.timeout) * time.Second))
+			// cs.conn.SetReadDeadline(time.Now().Add(time.Duration(cs.timeout) * time.Second))
 			_, err := io.ReadAtLeast(cs.conn, buf, 7)
 
 			if err != nil {
