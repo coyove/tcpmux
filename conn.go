@@ -214,6 +214,10 @@ type Conn struct {
 }
 
 func (c *Conn) FirstByte() (b byte, err error) {
+	if c.len == 1 {
+		return c.first, c.err
+	}
+
 	var n int
 
 	c.data = uintptr(unsafe.Pointer(c)) + strconv.IntSize/8*3
