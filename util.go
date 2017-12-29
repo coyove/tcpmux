@@ -184,3 +184,7 @@ func (sm *Map32) IterateConst(callback func(id uint32, s unsafe.Pointer) bool) {
 	}
 	sm.RUnlock()
 }
+
+type Survey interface {
+	Count() (int, int)
+}
