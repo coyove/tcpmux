@@ -144,3 +144,7 @@ func (l *ListenPool) Close() error {
 func (l *ListenPool) Addr() net.Addr {
 	return l.ln.Addr()
 }
+
+func (l *ListenPool) Count() (int, int) {
+	return len(l.newStreamWaiting), l.realConns.Len()
+}
