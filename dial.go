@@ -27,6 +27,7 @@ type DialPool struct {
 
 	ErrorCallback func(error) bool
 	OnRealDial    func(conn net.Conn)
+	OnDial        func(conn net.Conn)
 }
 
 // NewDialer creates a new DialPool, set poolSize to 0 to disable pooling
@@ -155,6 +156,10 @@ func (d *DialPool) DialTimeout(timeout time.Duration) (net.Conn, error) {
 		if try > 1e6 && d.ErrorCallback != nil {
 			d.ErrorCallback(ErrTooManyTries)
 		}
+	}
+
+	if d.OnDial != nil {
+		d.OnDial(conn.conn)
 	}
 
 	return newStreamAndSayHello(conn)
