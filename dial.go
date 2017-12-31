@@ -7,7 +7,6 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/coyove/goflyway/pkg/fd"
 	"github.com/coyove/goflyway/pkg/rand"
 )
 
@@ -27,6 +26,7 @@ type DialPool struct {
 	r *rand.ConcurrentRand
 
 	ErrorCallback func(error) bool
+	OnRealDial    func(conn net.Conn)
 }
 
 // NewDialer creates a new DialPool, set poolSize to 0 to disable pooling
@@ -126,6 +126,11 @@ func (d *DialPool) DialTimeout(timeout time.Duration) (net.Conn, error) {
 		if t, _ := conn.(*net.TCPConn); t != nil {
 			t.SetNoDelay(true)
 		}
+
+		if d.OnRealDial != nil {
+			d.OnRealDial(conn)
+		}
+
 		c.conn = conn
 		go c.start()
 
@@ -164,15 +169,4 @@ func (d *DialPool) Count() (conns int, streams int) {
 	})
 
 	return
-}
-
-func (d *DialPool) GetFDs() []uintptr {
-	fds := make([]uintptr, 0, d.conns.Len())
-
-	d.conns.IterateConst(func(id uint32, p unsafe.Pointer) bool {
-		fds = append(fds, fd.ConnFD((*connState)(p).conn.(*Conn).Conn))
-		return true
-	})
-
-	return fds
 }
