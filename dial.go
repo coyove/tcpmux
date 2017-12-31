@@ -7,6 +7,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/coyove/goflyway/pkg/fd"
 	"github.com/coyove/goflyway/pkg/rand"
 )
 
@@ -163,4 +164,15 @@ func (d *DialPool) Count() (conns int, streams int) {
 	})
 
 	return
+}
+
+func (d *DialPool) GetFDs() []uintptr {
+	fds := make([]uintptr, 0, d.conns.Len())
+
+	d.conns.IterateConst(func(id uint32, p unsafe.Pointer) bool {
+		fds = append(fds, fd.ConnFD((*connState)(p).conn.(*Conn).Conn))
+		return true
+	})
+
+	return fds
 }
