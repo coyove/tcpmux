@@ -10,8 +10,6 @@ import (
 	"github.com/coyove/goflyway/pkg/rand"
 )
 
-var testDialHook func(network, addr string, timeout time.Duration) (net.Conn, error)
-
 type DialPool struct {
 	sync.Mutex
 
@@ -25,9 +23,9 @@ type DialPool struct {
 
 	r *rand.ConcurrentRand
 
-	ErrorCallback func(error) bool
-	OnRealDial    func(conn net.Conn)
-	OnDial        func(conn net.Conn)
+	OnError  func(error) bool
+	OnDialed func(conn net.Conn)
+	OnDial   func(address string) (net.Conn, error)
 }
 
 // NewDialer creates a new DialPool, set poolSize to 0 to disable pooling
@@ -106,7 +104,7 @@ func (d *DialPool) DialTimeout(timeout time.Duration) (net.Conn, error) {
 			streams:       Map32{}.New(),
 			master:        d.conns,
 			timeout:       streamTimeout,
-			ErrorCallback: d.ErrorCallback,
+			ErrorCallback: d.OnError,
 		}
 
 		d.conns.m[c.idx] = unsafe.Pointer(c)
@@ -114,10 +112,10 @@ func (d *DialPool) DialTimeout(timeout time.Duration) (net.Conn, error) {
 
 		var conn net.Conn
 		var err error
-		if testDialHook == nil {
+		if d.OnDial == nil {
 			conn, err = net.DialTimeout("tcp", d.address, timeout)
 		} else {
-			conn, err = testDialHook("tcp", d.address, timeout)
+			conn, err = d.OnDial(d.address)
 		}
 		if err != nil {
 			d.conns.Delete(c.idx)
@@ -128,8 +126,8 @@ func (d *DialPool) DialTimeout(timeout time.Duration) (net.Conn, error) {
 			t.SetNoDelay(true)
 		}
 
-		if d.OnRealDial != nil {
-			d.OnRealDial(conn)
+		if d.OnDialed != nil {
+			d.OnDialed(conn)
 		}
 
 		c.conn = conn
@@ -153,13 +151,9 @@ func (d *DialPool) DialTimeout(timeout time.Duration) (net.Conn, error) {
 			return true
 		})
 
-		if try > 1e6 && d.ErrorCallback != nil {
-			d.ErrorCallback(ErrTooManyTries)
+		if try > 1e6 && d.OnError != nil {
+			d.OnError(ErrTooManyTries)
 		}
-	}
-
-	if d.OnDial != nil {
-		d.OnDial(conn.conn)
 	}
 
 	return newStreamAndSayHello(conn)
