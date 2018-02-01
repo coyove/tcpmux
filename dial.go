@@ -21,7 +21,7 @@ type DialPool struct {
 	connsCtr  uint32
 	streamCtr uint32
 
-	r *rand.ConcurrentRand
+	r rand.Rand
 
 	OnError  func(error) bool
 	OnDialed func(conn net.Conn)
@@ -31,7 +31,6 @@ type DialPool struct {
 // NewDialer creates a new DialPool, set poolSize to 0 to disable pooling
 func NewDialer(addr string, poolSize int) *DialPool {
 	dp := &DialPool{
-		r:        rand.New(),
 		address:  addr,
 		maxConns: poolSize,
 		conns:    Map32{}.New(),
