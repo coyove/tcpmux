@@ -3,6 +3,7 @@ package tcpmux
 import (
 	"errors"
 	"net"
+	"sync/atomic"
 	"time"
 )
 
@@ -55,6 +56,33 @@ func Wrap(ln net.Listener) net.Listener {
 	return lp
 }
 
+func (l *ListenPool) Upgrade(conn net.Conn) {
+	var c *connState
+	counter := atomic.AddUint32(&l.connsCtr, 1)
+
+	c = &connState{
+		ErrorCallback: l.ErrorCallback,
+		idx:           counter,
+		conn:          conn,
+		master:        l.conns,
+		exitRead:      make(chan bool),
+		timeout:       streamTimeout,
+		streams:       Map32{}.New(),
+		newStreamCallback: func(state *readState) {
+			idx := state.idx
+			s := newStream(idx, c)
+			s.tag = 's'
+
+			c.streams.Store(idx, s)
+			l.streams.Store(idx, s)
+			l.newStreamWaiting <- uint64(idx)
+		},
+	}
+
+	l.conns.Store(counter, c)
+	go c.start()
+}
+
 func (l *ListenPool) accept() {
 ACCEPT:
 	for {
@@ -77,37 +105,15 @@ ACCEPT:
 				continue ACCEPT
 			}
 
-			l.connsCtr++
-
 			if ver != Version {
-				l.realConns.Store(l.connsCtr, conn)
-				idx := uint64(l.connsCtr) << 32
+				newCtr := atomic.AddUint32(&l.connsCtr, 1)
+				l.realConns.Store(newCtr, conn)
+				idx := uint64(newCtr) << 32
 				l.newStreamWaiting <- idx
 				continue ACCEPT
 			}
 
-			var c *connState
-			c = &connState{
-				ErrorCallback: l.ErrorCallback,
-				idx:           l.connsCtr,
-				conn:          conn,
-				master:        l.conns,
-				exitRead:      make(chan bool),
-				timeout:       streamTimeout,
-				streams:       Map32{}.New(),
-				newStreamCallback: func(state *readState) {
-					idx := state.idx
-					s := newStream(idx, c)
-					s.tag = 's'
-
-					c.streams.Store(idx, s)
-					l.streams.Store(idx, s)
-					l.newStreamWaiting <- uint64(idx)
-				},
-			}
-
-			l.conns.Store(l.connsCtr, c)
-			go c.start()
+			l.Upgrade(conn)
 		}
 	}
 }

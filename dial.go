@@ -21,7 +21,7 @@ type DialPool struct {
 	connsCtr  uint32
 	streamCtr uint32
 
-	r rand.Rand
+	r *rand.Rand
 
 	OnError  func(error) bool
 	OnDialed func(conn net.Conn)
@@ -34,6 +34,7 @@ func NewDialer(addr string, poolSize int) *DialPool {
 		address:  addr,
 		maxConns: poolSize,
 		conns:    Map32{}.New(),
+		r:        rand.New(),
 	}
 
 	return dp
