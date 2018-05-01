@@ -7,7 +7,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/coyove/goflyway/pkg/rand"
+	"github.com/coyove/common/rand"
 )
 
 type DialPool struct {
