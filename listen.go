@@ -2,6 +2,7 @@ package tcpmux
 
 import (
 	"errors"
+	"log"
 	"net"
 	"sync/atomic"
 	"time"
@@ -109,6 +110,9 @@ ACCEPT:
 				newCtr := atomic.AddUint32(&l.connsCtr, 1)
 				l.realConns.Store(newCtr, conn)
 				idx := uint64(newCtr) << 32
+				if len(l.newStreamWaiting) == acceptStreamChanSize {
+					log.Println("tcpmux: approach the channel buffer limit")
+				}
 				l.newStreamWaiting <- idx
 				continue ACCEPT
 			}

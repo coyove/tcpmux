@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"io"
 	"net"
-	"strconv"
 	"sync"
 	"time"
 	"unsafe"
@@ -204,47 +203,42 @@ func (cs *connState) stop() {
 
 // Conn can prefetch one byte from net.Conn before Read()
 type Conn struct {
-	data  uintptr
-	len   int
-	cap   int
-	first byte
-	err   error
+	first     bool
+	firstdata [1]byte
+	firsterr  error
 
 	net.Conn
 }
 
 func (c *Conn) FirstByte() (b byte, err error) {
-	if c.len == 1 {
-		return c.first, c.err
+	if c.first {
+		return c.firstdata[0], c.firsterr
 	}
 
+	c.first = true
 	var n int
 
-	c.data = uintptr(unsafe.Pointer(c)) + strconv.IntSize/8*3
-	c.len = 1
-	c.cap = 1
-
-	n, err = c.Conn.Read(*(*[]byte)(unsafe.Pointer(c)))
-	c.err = err
+	n, err = c.Conn.Read(c.firstdata[:])
+	c.firsterr = err
 
 	if n == 1 {
-		b = c.first
+		b = c.firstdata[0]
 	}
 
 	return
 }
 
 func (c *Conn) Read(p []byte) (int, error) {
-	if c.err != nil {
-		return 0, c.err
+	if c.firsterr != nil {
+		return 0, c.firsterr
 	}
 
-	if c.len == 1 {
-		p[0] = c.first
+	if c.first {
+		p[0] = c.firstdata[0]
 		xp := p[1:]
 
 		n, err := c.Conn.Read(xp)
-		c.len = 0
+		c.first = false
 
 		return n + 1, err
 	}
