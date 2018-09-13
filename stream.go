@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -18,6 +19,7 @@ type readState struct {
 }
 
 type Stream struct {
+	rm, wm sync.Mutex
 	master *connState
 
 	streamIdx uint32
@@ -32,12 +34,11 @@ type Stream struct {
 	readExit  chan byte // inform Read() to exit or timeout
 	writeExit chan byte // inform Write() to exit or timeout
 
-	tag byte // for debug purpose
+	tag     byte // for debug purpose
+	options byte
 
 	lastActive int64
 	timeout    int64
-
-	options byte
 }
 
 func newStream(id uint32, c *connState) *Stream {
@@ -75,6 +76,9 @@ func (c *Stream) notifyCodeError(code byte) error {
 }
 
 func (c *Stream) Read(buf []byte) (n int, err error) {
+	c.rm.Lock()
+	defer c.rm.Unlock()
+
 	if c == nil || c.closed.Load().(bool) {
 		return 0, c.notifyCodeError(notifyExit)
 	}
@@ -135,6 +139,9 @@ REPEAT:
 
 // Write is NOT a thread-safe function, it is intended to be used only in one goroutine
 func (c *Stream) Write(buf []byte) (n int, err error) {
+	c.wm.Lock()
+	defer c.wm.Unlock()
+
 	if c == nil || c.closed.Load().(bool) {
 		if (c.options & OptErrWhenClosed) > 0 {
 			return 0, ErrConnClosed
