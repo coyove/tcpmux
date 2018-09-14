@@ -35,7 +35,9 @@ func (cs *connState) broadcast(err error) {
 	}
 
 	cs.streams.Iterate(func(idx uint32, s unsafe.Pointer) bool {
-		(*Stream)(s).readResp <- &readState{err: err}
+		c := (*Stream)(s)
+		c.sendStateNonBlock(c.readState, notify{f: notifyError, err: err})
+		c.sendStateNonBlock(c.writeState, notify{f: notifyError, err: err})
 		return true
 	})
 

@@ -15,13 +15,18 @@ type state struct {
 	cmd byte
 }
 
+type notify struct {
+	f   byte
+	err error
+}
+
 type Stream struct {
 	master       *connState
 	readTmp      []byte
 	read         chan *state
 	readmu       sync.Mutex
-	readState    chan byte
-	writeState   chan byte
+	readState    chan notify
+	writeState   chan notify
 	streamIdx    uint32
 	lastActive   uint32
 	closed       bool
@@ -42,8 +47,8 @@ func newStream(id uint32, c *connState) *Stream {
 		streamIdx:  id,
 		master:     c,
 		read:       make(chan *state, readRespChanSize),
-		writeState: make(chan byte, 1),
-		readState:  make(chan byte, 1),
+		writeState: make(chan notify, 1),
+		readState:  make(chan notify, 1),
 		lastActive: timeNow(),
 	}
 	return s
@@ -208,9 +213,9 @@ func (c *Stream) notifyRead(code byte) {
 	}
 }
 
-func isset(b byte, flag byte) bool { return (b & flag) > 0 }
+func isset(b notify, flag byte) bool { return (b.f & flag) > 0 }
 
-func (c *Stream) getStateNonBlock(ch chan byte) (s byte) {
+func (c *Stream) getStateNonBlock(ch chan notify) (s notify) {
 	select {
 	case s = <-ch:
 		c.sendStateNonBlock(ch, s)
@@ -219,7 +224,7 @@ func (c *Stream) getStateNonBlock(ch chan byte) (s byte) {
 	return
 }
 
-func (c *Stream) sendStateNonBlock(ch chan byte, s byte) {
+func (c *Stream) sendStateNonBlock(ch chan notify, s notify) {
 	select {
 	case x := <-ch:
 		select {
@@ -236,8 +241,8 @@ func (c *Stream) sendStateNonBlock(ch chan byte, s byte) {
 
 func (c *Stream) closeNoInfo() {
 	c.closed = true
-	c.sendStateNonBlock(c.writeState, notifyClose)
-	c.sendStateNonBlock(c.readState, notifyClose)
+	c.sendStateNonBlock(c.writeState, notify{f: notifyClose})
+	c.sendStateNonBlock(c.readState, notify{f: notifyClose})
 }
 
 // Close closes the stream and remove it from its master

@@ -32,6 +32,7 @@ const (
 	notifyRemoteClosed = 1 << iota
 	notifyClose
 	notifyCancel
+	notifyError
 )
 
 const (
