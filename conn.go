@@ -19,7 +19,7 @@ type connState struct {
 
 	exitRead chan bool
 
-	newStreamCallback func(state *readState)
+	newStreamCallback func(state *state)
 	ErrorCallback     func(error) bool
 
 	timeout int64
@@ -43,22 +43,22 @@ func (cs *connState) broadcast(err error) {
 }
 
 func (cs *connState) start() {
-	readChan, daemonChan := make(chan bool), make(chan bool)
+	readChan, daemonExit := make(chan bool), make(chan bool)
 
 	go func() {
 		for {
-			time.Sleep(pingInterval * time.Second)
+			time.Sleep(time.Second)
 
 			select {
-			case <-daemonChan:
+			case <-daemonExit:
 				return
 			default:
-				now := time.Now().UnixNano()
+				now := uint32(time.Now().UnixNano() / 1e9)
 
 				// Garbage collect all closed and/or inactive streams
 				cs.streams.Iterate(func(idx uint32, p unsafe.Pointer) bool {
 					s := (*Stream)(p)
-					if s.closed.Load().(bool) {
+					if s.closed {
 						// return false to delete
 						return false
 					}
@@ -68,40 +68,28 @@ func (cs *connState) start() {
 						return true
 					}
 
-					s.notifyRead(notifyCancel)
-					s.notifyWrite(notifyCancel)
+					s.sendStateNonBlock(s.readState, notifyCancel)
+					s.sendStateNonBlock(s.writeState, notifyCancel)
 					return false
 				})
-
-				// Send ping
-				if _, err := cs.conn.Write(makeFrame(0, cmdPing, nil)); err != nil {
-					cs.broadcast(err)
-					return
-				}
 			}
 		}
 	}()
 
 	for {
 		go func() {
-			buf := make([]byte, 7)
+			buf := [8]byte{}
 
-			// Normally we have pings so this deadline shall never be met
 			// cs.conn.SetReadDeadline(time.Now().Add(time.Duration(cs.timeout) * time.Second))
-			_, err := io.ReadAtLeast(cs.conn, buf, 7)
+			_, err := io.ReadAtLeast(cs.conn, buf[:], 8)
 
 			if err != nil {
 				cs.broadcast(err)
 				return
 			}
 
-			if buf[0] != Version {
-				cs.broadcast(ErrInvalidVerHdr)
-				return
-			}
-
-			streamIdx := binary.BigEndian.Uint32(buf[1:])
-			streamLen := int(binary.BigEndian.Uint16(buf[5:]))
+			streamIdx := binary.BigEndian.Uint32(buf[2:])
+			streamLen := int(binary.BigEndian.Uint16(buf[6:]))
 
 			if buf[5] == cmdByte && buf[6] != 0 {
 				switch buf[6] {

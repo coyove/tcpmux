@@ -3,12 +3,13 @@ package tcpmux
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
+	"hash/fnv"
 	"sync"
 	"unsafe"
-)
 
-// Version is the header version, can be changed before Dial() or Listen()
-var Version byte = 0x89
+	"github.com/coyove/common/rand"
+)
 
 const (
 	readRespChanSize     = 256
@@ -23,12 +24,13 @@ const (
 	cmdHello = iota + 1
 	cmdAck
 	cmdErr
-	cmdClose
-	cmdPing
+	cmdRemoteClosed
+	cmdCancel
 )
 
 const (
-	notifyExit = iota
+	notifyRemoteClosed = 1 << iota
+	notifyClose
 	notifyCancel
 )
 
@@ -49,20 +51,32 @@ var (
 
 	// ErrInvalidVerHdr is returned when the stream doesn't start with a valid version
 	ErrInvalidVerHdr = errors.New("fatal: invalid header received")
+
+	ErrLargeWrite = fmt.Errorf("can't write large buffer which exceeds %d bytes", bufferSize)
+)
+
+var (
+	hashSeed = rand.New().Fetch(8)
 )
 
 func makeFrame(idx uint32, cmd byte, payload []byte) []byte {
+	h := fnv.New32()
+	h.Write(hashSeed)
+
 	if cmd != 0 {
-		buf := []byte{Version, 0, 0, 0, 0, cmdByte, cmd}
-		binary.BigEndian.PutUint32(buf[1:], idx)
+		buf := []byte{0, 0, 0, 0, 0, 0, cmdByte, cmd}
+		binary.BigEndian.PutUint32(buf[2:], idx)
+		h.Write(buf[2:])
+		binary.BigEndian.PutUint16(buf[:2], uint16(h.Sum32()))
 		return buf
 	}
 
-	header := make([]byte, 7+len(payload))
-	binary.BigEndian.PutUint32(header[1:], uint32(idx))
-	binary.BigEndian.PutUint16(header[5:], uint16(len(payload)))
-	header[0] = Version
-	copy(header[7:], payload)
+	header := make([]byte, 8+len(payload))
+	binary.BigEndian.PutUint32(header[2:], uint32(idx))
+	binary.BigEndian.PutUint16(header[6:], uint16(len(payload)))
+	copy(header[8:], payload)
+	h.Write(header[2:])
+	binary.BigEndian.PutUint16(header[:2], uint16(h.Sum32()))
 	return header
 }
 

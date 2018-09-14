@@ -1,16 +1,13 @@
 package tcpmux
 
 import (
-	"errors"
-	"fmt"
 	"io"
 	"net"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
-type readState struct {
+type state struct {
 	buf []byte
 	n   int
 	err error
@@ -19,174 +16,188 @@ type readState struct {
 }
 
 type Stream struct {
-	rm, wm sync.Mutex
-	master *connState
+	master       *connState
+	readTmp      []byte
+	read         chan *state
+	readmu       sync.Mutex
+	readState    chan byte
+	writeState   chan byte
+	streamIdx    uint32
+	lastActive   uint32
+	closed       bool
+	remoteClosed bool
+	tag          byte
+	options      byte
+	timeout      uint32
+	rdeadline    int64
+	wdeadline    int64
+}
 
-	streamIdx uint32
-
-	lastResp        *readState
-	readResp        chan *readState
-	readOverflowBuf []byte
-
-	writeStateResp chan byte // state returned from remote when writing
-
-	closed    atomic.Value
-	readExit  chan byte // inform Read() to exit or timeout
-	writeExit chan byte // inform Write() to exit or timeout
-
-	tag     byte // for debug purpose
-	options byte
-
-	lastActive int64
-	timeout    int64
+func timeNow() uint32 {
+	return uint32(time.Now().Unix())
 }
 
 func newStream(id uint32, c *connState) *Stream {
 	s := &Stream{
-		streamIdx:      id,
-		master:         c,
-		readExit:       make(chan byte, 1),
-		writeExit:      make(chan byte, 1),
-		readResp:       make(chan *readState, readRespChanSize),
-		writeStateResp: make(chan byte, 1),
-		timeout:        streamTimeout,
-		lastActive:     time.Now().UnixNano(),
+		streamIdx:  id,
+		master:     c,
+		read:       make(chan *state, readRespChanSize),
+		writeState: make(chan byte, 1),
+		readState:  make(chan byte, 1),
+		lastActive: timeNow(),
 	}
-
-	s.closed.Store(false)
 	return s
 }
 
-func (c *Stream) SetStreamOpt(opt byte) {
-	c.options |= opt
-}
-
-func (c *Stream) notifyCodeError(code byte) error {
-	switch code {
-	case notifyExit:
-		if (c.options & OptErrWhenClosed) > 0 {
-			return ErrConnClosed
-		}
-		return io.EOF
-	case notifyCancel:
-		return &timeoutError{}
-	default:
-		panic("unknown error")
+func (c *Stream) handleStateNotify(x byte) (bool, error) {
+	switch {
+	case isset(x, notifyClose):
+		c.closed = true
+		return false, ErrConnClosed
+	case isset(x, notifyRemoteClosed):
+		c.remoteClosed = true
+		return false, io.EOF
+	case isset(x, notifyCancel):
+		return true, nil
 	}
+	return false, nil
 }
 
 func (c *Stream) Read(buf []byte) (n int, err error) {
-	c.rm.Lock()
-	defer c.rm.Unlock()
-
-	if c == nil || c.closed.Load().(bool) {
-		return 0, c.notifyCodeError(notifyExit)
+	if c.closed {
+		return 0, ErrConnClosed
 	}
 
-	if c.readOverflowBuf != nil {
-		copy(buf, c.readOverflowBuf)
+	if c.remoteClosed {
+		return 0, io.EOF
+	}
 
-		if len(c.readOverflowBuf) > len(buf) {
-			c.readOverflowBuf = c.readOverflowBuf[len(buf):]
+	if _, err := c.handleStateNotify(c.getStateNonBlock(c.readState)); err != nil {
+		return 0, err
+	}
+
+	var after time.Duration
+	if c.rdeadline > 0 {
+		after = time.Duration(c.rdeadline-time.Now().UnixNano()/1e6) * time.Millisecond
+		if int64(after) < 0 {
+			return 0, &timeoutError{}
+		}
+	} else {
+		after = time.Second
+	}
+
+	c.lastActive = timeNow()
+
+	c.readmu.Lock()
+	defer c.readmu.Unlock()
+
+	if c.readTmp != nil {
+		copy(buf, c.readTmp)
+
+		if len(c.readTmp) > len(buf) {
+			c.readTmp = c.readTmp[len(buf):]
 			return len(buf), nil
 		}
 
-		n = len(c.readOverflowBuf)
-		c.readOverflowBuf = nil
+		n = len(c.readTmp)
+		c.readTmp = nil
 		return
 	}
 
-	c.lastActive = time.Now().UnixNano()
-
 REPEAT:
 	select {
-	case x := <-c.readResp:
-		if x.cmd == cmdAck {
+	case x := <-c.readState:
+		if cancel, err := c.handleStateNotify(x); err != nil {
+			return 0, err
+		} else if cancel {
+			return 0, &timeoutError{}
+		}
+	case x := <-c.read:
+		switch x.cmd {
+		case cmdAck:
+			// remote has acknowledged this stream
+			// repeat reading for new messages
 			goto REPEAT
 		}
 
-		if x.cmd == cmdClose {
-			if (c.options & OptErrWhenClosed) > 0 {
-				return 0, ErrConnClosed
-			}
-			return 0, io.EOF
+		if x.err != nil {
+			return 0, x.err
 		}
 
 		n, err = x.n, x.err
-
 		if x.buf != nil {
 			xbuf := x.buf[:x.n]
 			if len(xbuf) > len(buf) {
-				c.readOverflowBuf = xbuf[len(buf):]
+				c.readTmp = xbuf[len(buf):]
 				n = len(buf)
 			}
-
 			copy(buf, xbuf)
 		}
-
-		if x.err != nil {
-			n = 0
+	case <-time.After(after):
+		if c.rdeadline == 0 {
+			goto REPEAT
 		}
-
-		c.lastResp = x
-	case code := <-c.readExit:
-		return 0, c.notifyCodeError(code)
+		return 0, &timeoutError{}
 	}
 
-	c.lastActive = time.Now().UnixNano()
+	c.lastActive = timeNow()
 	return
 }
 
-// Write is NOT a thread-safe function, it is intended to be used only in one goroutine
 func (c *Stream) Write(buf []byte) (n int, err error) {
-	c.wm.Lock()
-	defer c.wm.Unlock()
+	if c.closed {
+		return 0, ErrConnClosed
+	}
 
-	if c == nil || c.closed.Load().(bool) {
-		if (c.options & OptErrWhenClosed) > 0 {
-			return 0, ErrConnClosed
-		}
-		return len(buf), nil
+	if c.remoteClosed {
+		return 0, io.EOF
 	}
 
 	if len(buf) > bufferSize {
-		return 0, fmt.Errorf("the buffer is larger than %d, try splitting it into smaller ones", bufferSize)
+		return 0, ErrLargeWrite
 	}
 
-	writeChan := make(chan bool, 1)
+	if _, err := c.handleStateNotify(c.getStateNonBlock(c.writeState)); err != nil {
+		return 0, err
+	}
+
+	var after time.Duration
+	if c.wdeadline > 0 {
+		after = time.Duration(c.wdeadline-time.Now().UnixNano()/1e6) * time.Millisecond
+		if int64(after) < 0 {
+			return 0, &timeoutError{}
+		}
+	} else {
+		after = time.Second
+	}
+
+	writeOK := make(chan bool, 1)
 	go func() {
 		n, err = c.master.conn.Write(makeFrame(c.streamIdx, 0, buf))
-		writeChan <- true
+		writeOK <- true
 	}()
 
+REPEAT:
 	select {
-	case <-writeChan:
+	case <-writeOK:
 		if err != nil {
-			return
+			return 0, err
 		}
-	case code := <-c.writeExit:
-		return 0, c.notifyCodeError(code)
+	case x := <-c.writeState:
+		if cancel, err := c.handleStateNotify(x); err != nil {
+			return 0, err
+		} else if cancel {
+			return 0, &timeoutError{}
+		}
+	case <-time.After(after):
+		if c.wdeadline == 0 {
+			goto REPEAT
+		}
+		return 0, &timeoutError{}
 	}
 
-	c.lastActive = time.Now().UnixNano()
-	select {
-	case cmd := <-c.writeStateResp:
-		switch cmd {
-		case cmdErr:
-			return 0, errors.New("write: remote returns an error")
-		case cmdClose:
-			if (c.options & OptErrWhenClosed) > 0 {
-				return 0, ErrConnClosed
-			}
-			return len(buf), nil //ErrConnClosed
-		}
-	case code := <-c.writeExit:
-		return 0, c.notifyCodeError(code)
-	default:
-	}
-
-	c.lastActive = time.Now().UnixNano()
-	n -= 7
+	c.lastActive = timeNow()
+	n -= 8
 	return
 }
 
@@ -197,17 +208,36 @@ func (c *Stream) notifyRead(code byte) {
 	}
 }
 
-func (c *Stream) notifyWrite(code byte) {
+func isset(b byte, flag byte) bool { return (b & flag) > 0 }
+
+func (c *Stream) getStateNonBlock(ch chan byte) (s byte) {
 	select {
-	case c.writeExit <- code:
+	case s = <-ch:
+		c.sendStateNonBlock(ch, s)
 	default:
+	}
+	return
+}
+
+func (c *Stream) sendStateNonBlock(ch chan byte, s byte) {
+	select {
+	case x := <-ch:
+		select {
+		case ch <- x | s:
+		default:
+		}
+	default:
+		select {
+		case ch <- s:
+		default:
+		}
 	}
 }
 
 func (c *Stream) closeNoInfo() {
-	c.notifyRead(notifyExit)
-	c.notifyWrite(notifyExit)
-	c.closed.Store(true)
+	c.closed = true
+	c.sendStateNonBlock(c.writeState, notifyClose)
+	c.sendStateNonBlock(c.readState, notifyClose)
 }
 
 // Close closes the stream and remove it from its master
@@ -228,17 +258,6 @@ func (c *Stream) CloseMaster() error {
 	return nil
 }
 
-// SetTimeout sets the timeout for this stream, error range: 1 sec
-func (c *Stream) SetTimeout(sec int64) {
-	c.timeout = sec
-	c.master.timeout = sec
-}
-
-// SetMasterTimeout sets the timeout for this stream's net.Conn, error range: 1 sec
-func (c *Stream) SetMasterTimeout(sec int64) {
-	c.master.timeout = sec
-}
-
 // LocalAddr is a compatible method for net.Conn
 func (c *Stream) LocalAddr() net.Addr { return c.master.conn.LocalAddr() }
 
@@ -248,32 +267,35 @@ func (c *Stream) RemoteAddr() net.Addr { return c.master.conn.RemoteAddr() }
 // SetReadDeadline is a compatible method for net.Conn
 func (c *Stream) SetReadDeadline(t time.Time) error {
 	// Usually a time.Time{} is used for clearing the deadline
-	// But we must have an internal timeout, so ignore it
 	if t.IsZero() {
-		clearCancel(c.readExit)
+		c.rdeadline = 0
 		return nil
 	}
 
 	if t.UnixNano() < time.Now().UnixNano()+1e6 {
-		c.notifyRead(notifyCancel)
+		c.rdeadline = t.UnixNano()/1e6 - 1
+		c.sendStateNonBlock(c.readState, notifyCancel)
 		return nil
 	}
 
+	c.rdeadline = t.UnixNano() / 1e6
 	return nil
 }
 
 // SetWriteDeadline is a compatible method for net.Conn
 func (c *Stream) SetWriteDeadline(t time.Time) error {
 	if t.IsZero() {
-		clearCancel(c.writeExit)
+		c.wdeadline = 0
 		return nil
 	}
 
 	if t.UnixNano() < time.Now().UnixNano()+1e6 {
-		c.notifyWrite(notifyCancel)
+		c.wdeadline = t.UnixNano()/1e6 - 1
+		c.sendStateNonBlock(c.writeState, notifyCancel)
 		return nil
 	}
 
+	c.wdeadline = t.UnixNano()/1e6 - 1
 	return nil
 }
 
@@ -282,4 +304,8 @@ func (c *Stream) SetDeadline(t time.Time) error {
 	c.SetReadDeadline(t)
 	c.SetWriteDeadline(t)
 	return nil
+}
+
+func (c *Stream) SetInactiveTimeout(secs uint32) {
+	c.timeout = secs
 }
