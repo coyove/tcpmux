@@ -68,7 +68,6 @@ func (d *DialPool) DialTimeout(timeout time.Duration) (net.Conn, error) {
 		c.streams.Store(s.streamIdx, s)
 
 		_, err := c.conn.Write(makeFrame(s.streamIdx, cmdHello, nil))
-
 		if err != nil {
 			c.broadcast(err)
 			return nil, err
@@ -77,20 +76,22 @@ func (d *DialPool) DialTimeout(timeout time.Duration) (net.Conn, error) {
 		// After sending the hello, we wait for the ack, or timed out
 		if timeout != 0 {
 			select {
-			case resp := <-s.writeStateResp:
-				if resp != cmdAck {
+			case resp := <-s.read:
+				if !resp.ack {
 					return nil, ErrStreamLost
 				}
 			case <-time.After(timeout):
 				return nil, &timeoutError{}
 			}
 		} else {
+			// log.Println("?", s.streamIdx)
 			select {
-			case resp := <-s.writeStateResp:
-				if resp != cmdAck {
+			case resp := <-s.read:
+				if !resp.ack {
 					return nil, ErrStreamLost
 				}
 			}
+			// log.Println("!")
 		}
 
 		return s, nil

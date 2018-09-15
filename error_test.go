@@ -11,11 +11,6 @@ import (
 )
 
 func TestTCPServerCloseWhenWrite(t *testing.T) {
-	closeWhenWrite(true)
-	closeWhenWrite(false)
-}
-
-func closeWhenWrite(flag bool) {
 	ready, exit := make(chan bool), make(chan bool)
 
 	go func() {
@@ -25,7 +20,6 @@ func closeWhenWrite(flag bool) {
 		conn, err := ln.Accept()
 		if err != nil {
 			panic(err)
-			return
 		}
 
 		conn.Close()
@@ -40,20 +34,10 @@ func closeWhenWrite(flag bool) {
 	d := NewDialer("127.0.0.1:13739", 1)
 	conn, _ := d.Dial()
 
-	if flag {
-		conn.(*Stream).SetStreamOpt(OptErrWhenClosed)
-	}
-
 	_, err := conn.Read([]byte{})
 
-	if flag {
-		if err != ErrConnClosed {
-			panic(err)
-		}
-	} else {
-		if err != io.EOF {
-			panic(err)
-		}
+	if err != io.EOF {
+		panic(err)
 	}
 	conn.Close()
 
@@ -185,8 +169,7 @@ func TestHTTPServerConnClosed(t *testing.T) {
 			Dial: func(network, addr string) (net.Conn, error) {
 				s, err := p.Dial()
 				if err == nil {
-					s.(*Stream).SetStreamOpt(OptErrWhenClosed)
-					s.(*Stream).SetTimeout(2)
+					s.(*Stream).SetInactiveTimeout(2)
 				}
 				return s, err
 			},

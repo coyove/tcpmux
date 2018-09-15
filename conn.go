@@ -3,6 +3,7 @@ package tcpmux
 import (
 	"encoding/binary"
 	"io"
+	"log"
 	"net"
 	"sync"
 	"time"
@@ -19,7 +20,7 @@ type connState struct {
 
 	exitRead chan bool
 
-	newStreamCallback func(state *state)
+	newStreamCallback func(state notify)
 	ErrorCallback     func(error) bool
 
 	timeout int64
@@ -36,8 +37,8 @@ func (cs *connState) broadcast(err error) {
 
 	cs.streams.Iterate(func(idx uint32, s unsafe.Pointer) bool {
 		c := (*Stream)(s)
-		c.sendStateNonBlock(c.readState, notify{f: notifyError, err: err})
-		c.sendStateNonBlock(c.writeState, notify{f: notifyError, err: err})
+		c.sendStateNonBlock(c.read, notify{flag: notifyError, err: err})
+		c.sendStateNonBlock(c.write, notify{flag: notifyError, err: err})
 		return true
 	})
 
@@ -47,6 +48,7 @@ func (cs *connState) broadcast(err error) {
 func (cs *connState) start() {
 	readChan, daemonExit := make(chan bool), make(chan bool)
 
+	// start daemon, it will do the gc work
 	go func() {
 		for {
 			time.Sleep(time.Second)
@@ -66,12 +68,12 @@ func (cs *connState) start() {
 					}
 
 					// TODO
-					if to := s.timeout; to > 0 && (now-s.lastActive)/1e9 <= to {
+					if to := s.timeout; to == 0 || (now-s.lastActive)/1e9 <= to {
 						return true
 					}
 
-					s.sendStateNonBlock(s.readState, notifyCancel)
-					s.sendStateNonBlock(s.writeState, notifyCancel)
+					s.sendStateNonBlock(s.read, notify{flag: notifyCancel, src: 'g'})
+					s.sendStateNonBlock(s.write, notify{flag: notifyCancel, src: 'g'})
 					return false
 				})
 			}
@@ -81,48 +83,54 @@ func (cs *connState) start() {
 	for {
 		go func() {
 			buf := [8]byte{}
+			h := fnv32SH()
 
 			// cs.conn.SetReadDeadline(time.Now().Add(time.Duration(cs.timeout) * time.Second))
 			_, err := io.ReadAtLeast(cs.conn, buf[:], 8)
-
 			if err != nil {
 				cs.broadcast(err)
 				return
 			}
 
+			hash := binary.BigEndian.Uint16(buf[:2])
 			streamIdx := binary.BigEndian.Uint32(buf[2:])
 			streamLen := int(binary.BigEndian.Uint16(buf[6:]))
 
-			if buf[5] == cmdByte && buf[6] != 0 {
-				switch buf[6] {
+			// it's a control frame
+			if buf[6] == cmdByte && buf[7] != 0 {
+				h.Write(buf[2:])
+				if hash != uint16(h.Sum32())|0x8000 {
+					// if we found a invalid hash, then the whole connection is not stable any more
+					// broadcast this error and stop all
+					log.Println(hash, buf)
+					cs.broadcast(ErrInvalidHash)
+					return
+				}
+
+				switch buf[7] {
 				case cmdHello:
 					// The stream will be added into connState in this callback
-					cs.newStreamCallback(&readState{idx: streamIdx})
+					cs.newStreamCallback(notify{idx: streamIdx})
 
-					buf[5], buf[6] = cmdByte, cmdAck
 					// We acknowledge the hello
-					if _, err = cs.conn.Write(buf); err != nil {
+					if _, err = cs.conn.Write(makeFrame(streamIdx, cmdAck, nil)); err != nil {
 						cs.broadcast(err)
 						return
 					}
-
-					fallthrough
-				case cmdPing:
-					readChan <- true
-					return
-				default:
+				case cmdAck:
 					if p, ok := cs.streams.Load(streamIdx); ok {
-						s, cmd := (*Stream)(p), buf[6]
-						select {
-						case s.writeStateResp <- cmd:
-						default:
-						}
-
-						select {
-						case s.readResp <- &readState{cmd: cmd}:
-						default:
-						}
+						s := (*Stream)(p)
+						s.read <- notify{ack: true}
 					}
+				case cmdRemoteClosed:
+					if p, ok := cs.streams.Load(streamIdx); ok {
+						s := (*Stream)(p)
+						// log.Println("receive remote close", string(s.tag), s.streamIdx)
+						s.sendStateNonBlock(s.write, notify{flag: notifyRemoteClosed, src: 'm'})
+						s.sendStateNonBlock(s.read, notify{flag: notifyRemoteClosed, src: 'm'})
+					}
+				default:
+					// cs.broadcast(fmt.Errorf("unknown remote command: %d", buf[7]))
 				}
 
 				readChan <- true
@@ -133,18 +141,20 @@ func (cs *connState) start() {
 			_, err = io.ReadAtLeast(cs.conn, payload, streamLen)
 			// Maybe we will encounter an error, but we pass it to streams
 			// Next loop when we read the header, we will have the error again, that time we will broadcast
-			rs := &readState{
-				n:   streamLen,
-				err: err,
-				buf: payload,
-				idx: streamIdx,
+			rs := notify{
+				err:  err,
+				idx:  streamIdx,
+				flag: notifyReady,
 			}
 
 			if s, ok := cs.streams.Load(streamIdx); ok {
-				(*Stream)(s).readResp <- rs
+				c := (*Stream)(s)
+				c.readmu.Lock()
+				c.readbuf = append(c.readbuf, payload...)
+				c.readmu.Unlock()
+				c.sendStateNonBlock(c.read, rs)
 			} else {
-				buf[5], buf[6] = cmdByte, cmdClose
-				if _, err = cs.conn.Write(buf); err != nil {
+				if _, err = cs.conn.Write(makeFrame(streamIdx, cmdRemoteClosed, nil)); err != nil {
 					cs.broadcast(err)
 					return
 				}
@@ -154,15 +164,16 @@ func (cs *connState) start() {
 
 		select {
 		case <-cs.exitRead:
-			daemonChan <- true
+			daemonExit <- true
 			return
 		default:
 		}
 
 		select {
 		case <-readChan:
+			// continue next loop
 		case <-cs.exitRead:
-			daemonChan <- true
+			daemonExit <- true
 			return
 		}
 	}

@@ -2,7 +2,6 @@ package tcpmux
 
 import (
 	"encoding/binary"
-	"fmt"
 	"io/ioutil"
 	"math/rand"
 	"net"
@@ -113,7 +112,6 @@ func stringTransfer(num, loop int, pool bool) {
 			conn, err := ln.Accept()
 			if err != nil {
 				panic(err)
-				return
 			}
 
 			wg.Add(1)
@@ -125,16 +123,19 @@ func stringTransfer(num, loop int, pool bool) {
 				}
 
 				buf = buf[:n]
-				idx := int(binary.BigEndian.Uint32(buf))
-				ln := int(binary.BigEndian.Uint32(buf[4:]))
+				// idx := int(binary.BigEndian.Uint32(buf))
+				// ln := int(binary.BigEndian.Uint32(buf[4:]))
 
-				strLock.Lock()
-				if string(buf[8:8+ln]) != strMap[idx] {
-					panic(fmt.Sprintf("%d: %v", len(strMap), buf))
+				// strLock.Lock()
+				// if string(buf[8:8+ln]) != strMap[idx] {
+				// 	panic(fmt.Sprintf("%d: %v %v", len(strMap), string(buf[8:8+ln]), strMap[idx]))
+				// }
+				// delete(strMap, idx)
+				// strLock.Unlock()
+				if buf[0] != 1 {
+					panic(buf[0])
 				}
-				delete(strMap, idx)
-				strLock.Unlock()
-
+				// log.Println(time.Now().UnixNano()/1000, n)
 				conn.Close()
 				wg.Done()
 			}(conn)
@@ -168,6 +169,8 @@ func stringTransfer(num, loop int, pool bool) {
 		count = loop
 	}
 
+	// count = 1
+	// total = loop
 	for n := 0; n < total; n++ {
 		wg := sync.WaitGroup{}
 		for i := 0; i < count; i++ {
@@ -187,15 +190,17 @@ func stringTransfer(num, loop int, pool bool) {
 				binary.BigEndian.PutUint32(buf, uint32(i))
 				binary.BigEndian.PutUint32(buf[4:], uint32(len(str)))
 
-				_, err = conn.Write(buf)
+				_, err = conn.Write([]byte{1})
 				if err != nil {
 					panic(err)
 				}
 				conn.Close()
 				wg.Done()
+				// log.Println("===")
 			}(i)
 		}
 		wg.Wait()
+		// time.Sleep(100 * time.Millisecond)
 	}
 
 	select {

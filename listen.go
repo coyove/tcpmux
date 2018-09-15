@@ -69,7 +69,7 @@ func (l *ListenPool) Upgrade(conn net.Conn) {
 		exitRead:      make(chan bool),
 		timeout:       streamTimeout,
 		streams:       Map32{}.New(),
-		newStreamCallback: func(state *readState) {
+		newStreamCallback: func(state notify) {
 			idx := state.idx
 			s := newStream(idx, c)
 			s.tag = 's'
@@ -106,7 +106,7 @@ ACCEPT:
 				continue ACCEPT
 			}
 
-			if ver != Version {
+			if ver < 128 {
 				newCtr := atomic.AddUint32(&l.connsCtr, 1)
 				l.realConns.Store(newCtr, conn)
 				idx := uint64(newCtr) << 32

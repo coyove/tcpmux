@@ -7,32 +7,25 @@ import (
 	"time"
 )
 
-type state struct {
-	buf []byte
-	n   int
-	err error
-	idx uint32
-	cmd byte
-}
-
 type notify struct {
-	f   byte
-	err error
+	err  error
+	idx  uint32
+	ack  bool
+	flag byte
+	src  byte
 }
 
 type Stream struct {
 	master       *connState
-	readTmp      []byte
-	read         chan *state
+	readbuf      []byte
 	readmu       sync.Mutex
-	readState    chan notify
-	writeState   chan notify
+	read         chan notify
+	write        chan notify
 	streamIdx    uint32
 	lastActive   uint32
 	closed       bool
 	remoteClosed bool
 	tag          byte
-	options      byte
 	timeout      uint32
 	rdeadline    int64
 	wdeadline    int64
@@ -46,40 +39,16 @@ func newStream(id uint32, c *connState) *Stream {
 	s := &Stream{
 		streamIdx:  id,
 		master:     c,
-		read:       make(chan *state, readRespChanSize),
-		writeState: make(chan notify, 1),
-		readState:  make(chan notify, 1),
+		write:      make(chan notify, 1),
+		read:       make(chan notify, 1),
+		readbuf:    make([]byte, 0),
 		lastActive: timeNow(),
 	}
 	return s
 }
 
-func (c *Stream) handleStateNotify(x byte) (bool, error) {
-	switch {
-	case isset(x, notifyClose):
-		c.closed = true
-		return false, ErrConnClosed
-	case isset(x, notifyRemoteClosed):
-		c.remoteClosed = true
-		return false, io.EOF
-	case isset(x, notifyCancel):
-		return true, nil
-	}
-	return false, nil
-}
-
 func (c *Stream) Read(buf []byte) (n int, err error) {
-	if c.closed {
-		return 0, ErrConnClosed
-	}
-
-	if c.remoteClosed {
-		return 0, io.EOF
-	}
-
-	if _, err := c.handleStateNotify(c.getStateNonBlock(c.readState)); err != nil {
-		return 0, err
-	}
+	c.lastActive = timeNow()
 
 	var after time.Duration
 	if c.rdeadline > 0 {
@@ -91,52 +60,40 @@ func (c *Stream) Read(buf []byte) (n int, err error) {
 		after = time.Second
 	}
 
-	c.lastActive = timeNow()
-
+READ:
 	c.readmu.Lock()
-	defer c.readmu.Unlock()
-
-	if c.readTmp != nil {
-		copy(buf, c.readTmp)
-
-		if len(c.readTmp) > len(buf) {
-			c.readTmp = c.readTmp[len(buf):]
-			return len(buf), nil
-		}
-
-		n = len(c.readTmp)
-		c.readTmp = nil
+	if len(c.readbuf) > 0 {
+		n = copy(buf, c.readbuf)
+		c.readbuf = c.readbuf[n:]
+		c.readmu.Unlock()
 		return
 	}
+	c.readmu.Unlock()
 
+	if c.closed {
+		return 0, ErrConnClosed
+	}
+
+	if c.remoteClosed {
+		return 0, io.EOF
+	}
+	// log.Println("read", c.streamIdx)
 REPEAT:
 	select {
-	case x := <-c.readState:
-		if cancel, err := c.handleStateNotify(x); err != nil {
-			return 0, err
-		} else if cancel {
-			return 0, &timeoutError{}
-		}
 	case x := <-c.read:
-		switch x.cmd {
-		case cmdAck:
-			// remote has acknowledged this stream
-			// repeat reading for new messages
-			goto REPEAT
-		}
-
-		if x.err != nil {
+		switch {
+		case isset(x, notifyReady):
+			goto READ
+		case isset(x, notifyRemoteClosed):
+			c.remoteClosed = true
+			return 0, io.EOF
+		case isset(x, notifyCancel):
+			return 0, &timeoutError{}
+		case isset(x, notifyError):
 			return 0, x.err
-		}
-
-		n, err = x.n, x.err
-		if x.buf != nil {
-			xbuf := x.buf[:x.n]
-			if len(xbuf) > len(buf) {
-				c.readTmp = xbuf[len(buf):]
-				n = len(buf)
-			}
-			copy(buf, xbuf)
+		case isset(x, notifyClose):
+			c.closed = true
+			return 0, ErrConnClosed
 		}
 	case <-time.After(after):
 		if c.rdeadline == 0 {
@@ -150,22 +107,6 @@ REPEAT:
 }
 
 func (c *Stream) Write(buf []byte) (n int, err error) {
-	if c.closed {
-		return 0, ErrConnClosed
-	}
-
-	if c.remoteClosed {
-		return 0, io.EOF
-	}
-
-	if len(buf) > bufferSize {
-		return 0, ErrLargeWrite
-	}
-
-	if _, err := c.handleStateNotify(c.getStateNonBlock(c.writeState)); err != nil {
-		return 0, err
-	}
-
 	var after time.Duration
 	if c.wdeadline > 0 {
 		after = time.Duration(c.wdeadline-time.Now().UnixNano()/1e6) * time.Millisecond
@@ -176,23 +117,45 @@ func (c *Stream) Write(buf []byte) (n int, err error) {
 		after = time.Second
 	}
 
-	writeOK := make(chan bool, 1)
+	c.lastActive = timeNow()
+
+	if c.closed {
+		return 0, ErrConnClosed
+	}
+
+	if c.remoteClosed {
+		return len(buf), nil
+	}
+
+	if len(buf) > bufferSize {
+		return 0, ErrLargeWrite
+	}
+
 	go func() {
 		n, err = c.master.conn.Write(makeFrame(c.streamIdx, 0, buf))
-		writeOK <- true
+		// log.Println("->", c.streamIdx)
+		c.sendStateNonBlock(c.write, notify{flag: notifyReady})
 	}()
 
+	// log.Println("Wait", c.streamIdx)
+	// log.Println("Write", c.streamIdx, string(buf))
 REPEAT:
 	select {
-	case <-writeOK:
-		if err != nil {
-			return 0, err
-		}
-	case x := <-c.writeState:
-		if cancel, err := c.handleStateNotify(x); err != nil {
-			return 0, err
-		} else if cancel {
+	case x := <-c.write:
+		switch {
+		case isset(x, notifyReady):
+			// conn.Write is completed
+			// exit select
+		case isset(x, notifyRemoteClosed):
+			c.remoteClosed = true
+			return len(buf), nil
+		case isset(x, notifyCancel):
 			return 0, &timeoutError{}
+		case isset(x, notifyError):
+			return 0, x.err
+		case isset(x, notifyClose):
+			c.closed = true
+			return 0, ErrConnClosed
 		}
 	case <-time.After(after):
 		if c.wdeadline == 0 {
@@ -201,34 +164,21 @@ REPEAT:
 		return 0, &timeoutError{}
 	}
 
+	// log.Println("Wait OK", c.streamIdx)
 	c.lastActive = timeNow()
 	n -= 8
 	return
 }
 
-func (c *Stream) notifyRead(code byte) {
-	select {
-	case c.readExit <- code:
-	default:
-	}
-}
-
-func isset(b notify, flag byte) bool { return (b.f & flag) > 0 }
-
-func (c *Stream) getStateNonBlock(ch chan notify) (s notify) {
-	select {
-	case s = <-ch:
-		c.sendStateNonBlock(ch, s)
-	default:
-	}
-	return
-}
+func isset(b notify, flag byte) bool { return (b.flag & flag) > 0 }
 
 func (c *Stream) sendStateNonBlock(ch chan notify, s notify) {
 	select {
 	case x := <-ch:
+		x.flag |= s.flag
+		x.err = s.err
 		select {
-		case ch <- x | s:
+		case ch <- x:
 		default:
 		}
 	default:
@@ -241,18 +191,22 @@ func (c *Stream) sendStateNonBlock(ch chan notify, s notify) {
 
 func (c *Stream) closeNoInfo() {
 	c.closed = true
-	c.sendStateNonBlock(c.writeState, notify{f: notifyClose})
-	c.sendStateNonBlock(c.readState, notify{f: notifyClose})
+	c.sendStateNonBlock(c.write, notify{flag: notifyClose, src: 'c'})
+	c.sendStateNonBlock(c.read, notify{flag: notifyClose, src: 'c'})
 }
 
 // Close closes the stream and remove it from its master
 func (c *Stream) Close() error {
 	c.closeNoInfo()
 	// logg.D(buf)
-	if _, err := c.master.conn.Write(makeFrame(c.streamIdx, cmdClose, nil)); err != nil {
+	if _, err := c.master.conn.Write(makeFrame(c.streamIdx, cmdRemoteClosed, nil)); err != nil {
 		c.master.broadcast(err)
 	}
 
+	// x := make([]byte, 32*1024)
+	// // n := runtime.Stack(x, false)
+	// n := 0
+	// log.Println("close", time.Now().UnixNano()/1e3, c.streamIdx, string(c.tag), string(x[:n]))
 	c.master.streams.Delete(c.streamIdx)
 	return nil
 }
@@ -279,7 +233,7 @@ func (c *Stream) SetReadDeadline(t time.Time) error {
 
 	if t.UnixNano() < time.Now().UnixNano()+1e6 {
 		c.rdeadline = t.UnixNano()/1e6 - 1
-		c.sendStateNonBlock(c.readState, notifyCancel)
+		c.sendStateNonBlock(c.read, notify{flag: notifyCancel, src: 'r'})
 		return nil
 	}
 
@@ -296,7 +250,7 @@ func (c *Stream) SetWriteDeadline(t time.Time) error {
 
 	if t.UnixNano() < time.Now().UnixNano()+1e6 {
 		c.wdeadline = t.UnixNano()/1e6 - 1
-		c.sendStateNonBlock(c.writeState, notifyCancel)
+		c.sendStateNonBlock(c.write, notify{flag: notifyCancel, src: 'w'})
 		return nil
 	}
 

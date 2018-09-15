@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash"
 	"hash/fnv"
 	"sync"
 	"unsafe"
@@ -23,9 +24,7 @@ const (
 const (
 	cmdHello = iota + 1
 	cmdAck
-	cmdErr
 	cmdRemoteClosed
-	cmdCancel
 )
 
 const (
@@ -33,6 +32,7 @@ const (
 	notifyClose
 	notifyCancel
 	notifyError
+	notifyReady
 )
 
 const (
@@ -51,7 +51,7 @@ var (
 	ErrTooManyTries = errors.New("dial: too many tries of finding a valid conn")
 
 	// ErrInvalidVerHdr is returned when the stream doesn't start with a valid version
-	ErrInvalidVerHdr = errors.New("fatal: invalid header received")
+	ErrInvalidHash = errors.New("fatal: invalid hash")
 
 	ErrLargeWrite = fmt.Errorf("can't write large buffer which exceeds %d bytes", bufferSize)
 )
@@ -60,15 +60,25 @@ var (
 	hashSeed = rand.New().Fetch(8)
 )
 
-func makeFrame(idx uint32, cmd byte, payload []byte) []byte {
+func fnv32SH() hash.Hash32 {
 	h := fnv.New32()
 	h.Write(hashSeed)
+	return h
+}
+
+func makeFrame(idx uint32, cmd byte, payload []byte) []byte {
+	h := fnv32SH()
+	sum := func() uint16 {
+		s := uint16(h.Sum32())
+		s |= 0x8000
+		return uint16(s)
+	}
 
 	if cmd != 0 {
 		buf := []byte{0, 0, 0, 0, 0, 0, cmdByte, cmd}
 		binary.BigEndian.PutUint32(buf[2:], idx)
 		h.Write(buf[2:])
-		binary.BigEndian.PutUint16(buf[:2], uint16(h.Sum32()))
+		binary.BigEndian.PutUint16(buf[:2], sum())
 		return buf
 	}
 
@@ -77,7 +87,7 @@ func makeFrame(idx uint32, cmd byte, payload []byte) []byte {
 	binary.BigEndian.PutUint16(header[6:], uint16(len(payload)))
 	copy(header[8:], payload)
 	h.Write(header[2:])
-	binary.BigEndian.PutUint16(header[:2], uint16(h.Sum32()))
+	binary.BigEndian.PutUint16(header[:2], sum())
 	return header
 }
 
