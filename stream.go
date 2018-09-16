@@ -82,6 +82,11 @@ REPEAT:
 	select {
 	case x := <-c.read:
 		if isset(x, notifyReady) {
+			// We are notified that the data is ready
+			// But we will still check the remaining notifications:
+			//   for RemoteClosed, we continue, when the data has all been read, we return io.EOF
+			//   for Close, we do the same as above, but return ErrConnClosed
+			//   for Cancel, we immediately return timeout error, the data remains in the buffer
 			switch {
 			case isset(x, notifyRemoteClosed):
 				c.remoteClosed = true

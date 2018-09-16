@@ -270,7 +270,10 @@ func TestReadDeadline(t *testing.T) {
 		t.Fatal("failed")
 	}
 
-	t.Error(conn.Read(buf))
+	_, err = conn.Read(buf)
+	if err != io.EOF {
+		t.Fatal("failed")
+	}
 
 	conn.Close()
 }

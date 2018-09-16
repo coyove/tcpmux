@@ -72,8 +72,8 @@ func (cs *connState) start() {
 						return true
 					}
 
-					s.sendStateNonBlock(s.read, notify{flag: notifyCancel, src: 'g'})
-					s.sendStateNonBlock(s.write, notify{flag: notifyCancel, src: 'g'})
+					s.sendStateNonBlock(s.read, notify{flag: notifyClose, src: 'g'})
+					s.sendStateNonBlock(s.write, notify{flag: notifyClose, src: 'g'})
 					return false
 				})
 			}
