@@ -68,7 +68,7 @@ func (cs *connState) start() {
 					}
 
 					// TODO
-					if to := s.timeout; to == 0 || (now-s.lastActive)/1e9 <= to {
+					if to := s.timeout; to == 0 || now-s.lastActive <= to {
 						return true
 					}
 

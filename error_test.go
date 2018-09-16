@@ -195,10 +195,6 @@ func TestHTTPServerConnClosed(t *testing.T) {
 
 	go func() {
 		time.Sleep(time.Second)
-		// p.GetConns().Iterate(func(id uint32, p unsafe.Pointer) bool {
-		// 	(*(*net.Conn)(p)).Close()
-		// 	return true
-		// })
 		(*(*net.Conn)(p.GetConns().First())).Close()
 	}()
 
@@ -218,4 +214,63 @@ func TestHTTPServerConnClosed(t *testing.T) {
 	// This test should be finished in either 1 second or 3 seconds:
 	// 1 sec: net.Conn was closed and we immediately know it
 	// 3 sec: net.Conn was closed after 1 sec, and http requests timed out in 2 secs
+}
+
+func TestSimpleDial(t *testing.T) {
+	// non-existed address
+	p := NewDialer("1.2.3.4:5678", 10)
+	_, err := p.DialTimeout(time.Second)
+	if !err.(net.Error).Timeout() {
+		t.Fatal("failed")
+	}
+}
+
+func TestReadDeadline(t *testing.T) {
+	ready := make(chan bool, 1)
+	go func() {
+		ln := getListerner()
+		ready <- true
+		conn, err := ln.Accept()
+		if err != nil {
+			panic(err)
+		}
+
+		time.Sleep(2 * time.Second)
+		conn.Write([]byte{1})
+		conn.Close()
+		ln.Close()
+	}()
+
+	select {
+	case <-ready:
+	}
+
+	p := NewDialer(":13739", 10)
+	conn, err := p.Dial()
+	if err != nil {
+		panic(err)
+	}
+
+	buf := []byte{0}
+	conn.SetReadDeadline(time.Now().Add(time.Second))
+	_, err = conn.Read(buf)
+	if !err.(net.Error).Timeout() {
+		t.Fatal("failed")
+	}
+
+	time.Sleep(2 * time.Second)
+	_, err = (conn.Read(buf))
+	if !err.(net.Error).Timeout() {
+		t.Fatal("failed")
+	}
+
+	conn.SetReadDeadline(time.Time{})
+	n, err := conn.Read(buf)
+	if n != 1 || err != nil {
+		t.Fatal("failed")
+	}
+
+	t.Error(conn.Read(buf))
+
+	conn.Close()
 }

@@ -81,9 +81,18 @@ READ:
 REPEAT:
 	select {
 	case x := <-c.read:
-		switch {
-		case isset(x, notifyReady):
+		if isset(x, notifyReady) {
+			switch {
+			case isset(x, notifyRemoteClosed):
+				c.remoteClosed = true
+			case isset(x, notifyClose):
+				c.closed = true
+			case isset(x, notifyCancel):
+				return 0, &timeoutError{}
+			}
 			goto READ
+		}
+		switch {
 		case isset(x, notifyRemoteClosed):
 			c.remoteClosed = true
 			return 0, io.EOF
@@ -142,10 +151,10 @@ func (c *Stream) Write(buf []byte) (n int, err error) {
 REPEAT:
 	select {
 	case x := <-c.write:
-		switch {
-		case isset(x, notifyReady):
+		if isset(x, notifyReady) {
 			// conn.Write is completed
-			// exit select
+		}
+		switch {
 		case isset(x, notifyRemoteClosed):
 			c.remoteClosed = true
 			return len(buf), nil
