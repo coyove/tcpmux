@@ -10,18 +10,16 @@ import (
 	"github.com/coyove/common/rand"
 )
 
+var MasterTimeout uint32 = 20
+
 type DialPool struct {
 	sync.Mutex
-
-	maxConns int
-
-	address string
-	conns   Map32
-
+	address   string
+	conns     Map32
 	connsCtr  uint32
 	streamCtr uint32
-
-	r *rand.Rand
+	maxConns  uint32
+	r         *rand.Rand
 
 	OnError  func(error) bool
 	OnDialed func(conn net.Conn)
@@ -32,7 +30,7 @@ type DialPool struct {
 func NewDialer(addr string, poolSize int) *DialPool {
 	dp := &DialPool{
 		address:  addr,
-		maxConns: poolSize,
+		maxConns: uint32(poolSize),
 		conns:    Map32{}.New(),
 		r:        rand.New(),
 	}
@@ -98,13 +96,13 @@ func (d *DialPool) DialTimeout(timeout time.Duration) (net.Conn, error) {
 	}
 
 	d.conns.Lock()
-	if len(d.conns.m) < d.maxConns {
+	if len(d.conns.m) < int(d.maxConns) {
 		c := &connState{
 			idx:           atomic.AddUint32(&d.connsCtr, 1),
 			exitRead:      make(chan bool),
 			streams:       Map32{}.New(),
 			master:        d.conns,
-			timeout:       streamTimeout,
+			timeout:       MasterTimeout,
 			ErrorCallback: d.OnError,
 		}
 

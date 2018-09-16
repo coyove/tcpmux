@@ -12,19 +12,16 @@ import (
 )
 
 type connState struct {
-	conn net.Conn
-
-	master  Map32
-	streams Map32
-
-	idx uint32
-
+	conn     net.Conn
+	master   Map32
+	streams  Map32
+	idx      uint32
+	timeout  uint32
 	exitRead chan bool
 
 	newStreamCallback func(state notify)
 	ErrorCallback     func(error) bool
 
-	timeout int64
 	stopped bool
 	sync.Mutex
 }
@@ -58,8 +55,7 @@ func (cs *connState) start() {
 			case <-daemonExit:
 				return
 			default:
-				now := uint32(time.Now().UnixNano() / 1e9)
-
+				now := uint32(time.Now().Unix())
 				// Garbage collect all closed and/or inactive streams
 				cs.streams.Iterate(func(idx uint32, p unsafe.Pointer) bool {
 					s := (*Stream)(p)
@@ -100,10 +96,10 @@ func (cs *connState) start() {
 			// it's a control frame
 			if buf[6] == cmdByte && buf[7] != 0 {
 				h.Write(buf[2:])
-				if hash != uint16(h.Sum32())|0x8000 {
+				if xhash := uint16(h.Sum32()) | 0x8000; hash != xhash {
 					// if we found a invalid hash, then the whole connection is not stable any more
 					// broadcast this error and stop all
-					log.Println("invalid hash:", hash, uint16(h.Sum32())|0x8000, buf)
+					log.Println("invalid hash:", hash, xhash, buf)
 					cs.broadcast(ErrInvalidHash)
 					return
 				}
@@ -143,8 +139,10 @@ func (cs *connState) start() {
 
 			h.Write(buf[2:])
 			h.Write(payload)
-			if hash != uint16(h.Sum32())|0x8000 {
-				log.Println("invalid hash:", hash, uint16(h.Sum32())|0x8000, buf)
+			if xhash := uint16(h.Sum32()) | 0x8000; hash != xhash {
+				// if we found a invalid hash, then the whole connection is not stable any more
+				// broadcast this error and stop all
+				log.Println("invalid hash:", hash, xhash, buf)
 				cs.broadcast(ErrInvalidHash)
 				return
 			}

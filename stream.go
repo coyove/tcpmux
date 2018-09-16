@@ -44,6 +44,8 @@ func newStream(id uint32, c *connState) *Stream {
 		readbuf:    make([]byte, 0),
 		lastActive: timeNow(),
 	}
+
+	s.timeout = c.timeout
 	return s
 }
 
