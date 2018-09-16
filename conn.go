@@ -2,6 +2,7 @@ package tcpmux
 
 import (
 	"encoding/binary"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -102,7 +103,7 @@ func (cs *connState) start() {
 				if hash != uint16(h.Sum32())|0x8000 {
 					// if we found a invalid hash, then the whole connection is not stable any more
 					// broadcast this error and stop all
-					log.Println(hash, buf)
+					log.Println("invalid hash:", hash, uint16(h.Sum32())|0x8000, buf)
 					cs.broadcast(ErrInvalidHash)
 					return
 				}
@@ -130,7 +131,7 @@ func (cs *connState) start() {
 						s.sendStateNonBlock(s.read, notify{flag: notifyRemoteClosed, src: 'm'})
 					}
 				default:
-					// cs.broadcast(fmt.Errorf("unknown remote command: %d", buf[7]))
+					cs.broadcast(fmt.Errorf("unknown remote command: %d", buf[7]))
 				}
 
 				readChan <- true
@@ -139,6 +140,14 @@ func (cs *connState) start() {
 
 			payload := make([]byte, streamLen)
 			_, err = io.ReadAtLeast(cs.conn, payload, streamLen)
+
+			h.Write(buf[2:])
+			h.Write(payload)
+			if hash != uint16(h.Sum32())|0x8000 {
+				log.Println("invalid hash:", hash, uint16(h.Sum32())|0x8000, buf)
+				cs.broadcast(ErrInvalidHash)
+				return
+			}
 			// Maybe we will encounter an error, but we pass it to streams
 			// Next loop when we read the header, we will have the error again, that time we will broadcast
 			rs := notify{

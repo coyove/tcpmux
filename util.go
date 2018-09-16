@@ -8,8 +8,6 @@ import (
 	"hash/fnv"
 	"sync"
 	"unsafe"
-
-	"github.com/coyove/common/rand"
 )
 
 const (
@@ -57,12 +55,12 @@ var (
 )
 
 var (
-	hashSeed = rand.New().Fetch(8)
+	HashSeed []byte
 )
 
 func fnv32SH() hash.Hash32 {
 	h := fnv.New32()
-	h.Write(hashSeed)
+	h.Write(HashSeed)
 	return h
 }
 
