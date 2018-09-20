@@ -51,7 +51,10 @@ func (d *DialPool) Dial() (net.Conn, error) {
 // DialTimeout acts like Dial but takes a timeout.
 func (d *DialPool) DialTimeout(timeout time.Duration) (net.Conn, error) {
 	if d.maxConns == 0 {
-		return net.DialTimeout("tcp", d.address, timeout)
+		if d.OnDial == nil {
+			return net.DialTimeout("tcp", d.address, timeout)
+		}
+		return d.OnDial(d.address)
 	}
 
 	newStreamAndSayHello := func(c *connState) (*Stream, error) {
