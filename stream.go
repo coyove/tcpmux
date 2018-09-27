@@ -248,7 +248,7 @@ func (c *Stream) SetReadDeadline(t time.Time) error {
 	}
 
 	if t.UnixNano() < time.Now().UnixNano()+1e6 {
-		c.rdeadline = t.UnixNano()/1e6 - 1
+		c.rdeadline = 0
 		c.sendStateNonBlock(c.read, notify{flag: notifyCancel, src: 'r'})
 		return nil
 	}
@@ -265,7 +265,7 @@ func (c *Stream) SetWriteDeadline(t time.Time) error {
 	}
 
 	if t.UnixNano() < time.Now().UnixNano()+1e6 {
-		c.wdeadline = t.UnixNano()/1e6 - 1
+		c.wdeadline = 0
 		c.sendStateNonBlock(c.write, notify{flag: notifyCancel, src: 'w'})
 		return nil
 	}
