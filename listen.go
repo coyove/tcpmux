@@ -155,6 +155,6 @@ func (l *ListenPool) Addr() net.Addr {
 	return l.ln.Addr()
 }
 
-func (l *ListenPool) Count() (int, int) {
-	return len(l.newStreamWaiting), l.realConns.Len()
+func (l *ListenPool) Count() (int, int, int) {
+	return len(l.newStreamWaiting), l.conns.Len(), l.streams.Len()
 }
