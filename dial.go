@@ -161,13 +161,13 @@ func (d *DialPool) DialTimeout(timeout time.Duration) (net.Conn, error) {
 	return newStreamAndSayHello(conn)
 }
 
-func (d *DialPool) Count() (conns int, streams int) {
-	conns = d.conns.Len()
+func (d *DialPool) Count() []int {
+	conns := make([]int, 0, d.conns.Len())
 
 	d.conns.IterateConst(func(id uint32, p unsafe.Pointer) bool {
-		streams += (*connState)(p).streams.Len()
+		conns = append(conns, (*connState)(p).streams.Len())
 		return true
 	})
 
-	return
+	return conns
 }

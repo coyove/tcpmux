@@ -210,7 +210,7 @@ func (sm *Map32) IterateConst(callback func(id uint32, s unsafe.Pointer) bool) {
 }
 
 type Survey interface {
-	Count() (int, int)
+	Count() []int
 }
 
 func stacktrace() string {
