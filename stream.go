@@ -148,7 +148,7 @@ func (c *Stream) Write(buf []byte) (n int, err error) {
 	}
 
 	go func() {
-		n, err = c.master.conn.Write(makeFrame(c.streamIdx, 0, buf))
+		n, err = c.master.conn.Write(makeFrame(c.streamIdx, 0, c.tag == 'c', buf))
 		// log.Println("->", c.streamIdx)
 		c.sendStateNonBlock(c.write, notify{flag: notifyReady})
 	}()
@@ -182,7 +182,7 @@ REPEAT:
 
 	// log.Println("Wait OK", c.streamIdx)
 	c.lastActive = timeNow()
-	n -= 8
+	n = len(buf)
 	return
 }
 
@@ -215,7 +215,7 @@ func (c *Stream) closeNoInfo() {
 func (c *Stream) Close() error {
 	c.closeNoInfo()
 	// logg.D(buf)
-	if _, err := c.master.conn.Write(makeFrame(c.streamIdx, cmdRemoteClosed, nil)); err != nil {
+	if _, err := c.master.conn.Write(makeFrame(c.streamIdx, cmdRemoteClosed, c.tag == 'c', nil)); err != nil {
 		c.master.broadcast(err)
 	}
 

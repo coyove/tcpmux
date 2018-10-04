@@ -68,7 +68,7 @@ func (d *DialPool) DialTimeout(timeout time.Duration) (net.Conn, error) {
 		s.tag = 'c'
 		c.streams.Store(s.streamIdx, s)
 
-		_, err := c.conn.Write(makeFrame(s.streamIdx, cmdHello, nil))
+		_, err := c.conn.Write(makeFrame(s.streamIdx, cmdHello, true, nil))
 		if err != nil {
 			c.broadcast(err)
 			return nil, err

@@ -1,14 +1,17 @@
 package tcpmux
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"hash"
-	"hash/fnv"
+	"hash/crc32"
+	"io"
 	"runtime"
 	"sync"
 	"unsafe"
+
+	"github.com/coyove/common/rand"
 )
 
 const (
@@ -17,13 +20,13 @@ const (
 	bufferSize           = 32 * 1024 // 0x8000
 	streamTimeout        = 20        // seconds
 	pingInterval         = 2         // seconds
-	cmdByte              = 0xff
 )
 
 const (
 	cmdHello = iota + 1
 	cmdAck
 	cmdRemoteClosed
+	cmdPayload
 )
 
 const (
@@ -49,45 +52,37 @@ var (
 	// ErrTooManyTries is returned when a Dial tried too many times
 	ErrTooManyTries = errors.New("dial: too many tries of finding a valid conn")
 
-	// ErrInvalidVerHdr is returned when the stream doesn't start with a valid version
+	// ErrInvalidHash is returned when the stream doesn't start with a valid version
 	ErrInvalidHash = errors.New("fatal: invalid hash")
 
-	ErrLargeWrite = fmt.Errorf("can't write large buffer which exceeds %d bytes", bufferSize)
+	// ErrLargeWrite is returned when payload is too large to write
+	ErrLargeWrite = errors.New("can't write large buffer which exceeds 65535 bytes")
 )
 
-var (
-	HashSeed []byte
-)
-
-func fnv32SH() hash.Hash32 {
-	h := fnv.New32()
-	h.Write(HashSeed)
-	return h
-}
-
-func makeFrame(idx uint32, cmd byte, payload []byte) []byte {
-	h := fnv32SH()
-	sum := func() uint16 {
-		s := uint16(h.Sum32())
-		s |= 0x8000
-		return uint16(s)
-	}
+func makeFrame(idx uint32, cmd byte, mask bool, payload []byte) []byte {
+	h := crc32.NewIEEE()
+	p := &bytes.Buffer{}
 
 	if cmd != 0 {
-		buf := []byte{0, 0, 0, 0, 0, 0, cmdByte, cmd}
-		binary.BigEndian.PutUint32(buf[2:], idx)
-		h.Write(buf[2:])
-		binary.BigEndian.PutUint16(buf[:2], sum())
-		return buf
+		buf := []byte{0, 0, 0, 0, 0, 0, 0, 0, cmd}
+		binary.BigEndian.PutUint32(buf[4:], idx)
+		h.Write(buf[4:])
+		binary.BigEndian.PutUint32(buf[:4], h.Sum32())
+
+		WSWrite(p, buf, mask)
+		return p.Bytes()
 	}
 
-	header := make([]byte, 8+len(payload))
-	binary.BigEndian.PutUint32(header[2:], uint32(idx))
-	binary.BigEndian.PutUint16(header[6:], uint16(len(payload)))
-	copy(header[8:], payload)
-	h.Write(header[2:])
-	binary.BigEndian.PutUint16(header[:2], sum())
-	return header
+	header := make([]byte, 9+len(payload))
+	binary.BigEndian.PutUint32(header[4:], uint32(idx))
+	header[8] = cmdPayload
+	copy(header[9:], payload)
+
+	h.Write(header[4:])
+	binary.BigEndian.PutUint32(header[:4], h.Sum32())
+
+	WSWrite(p, header, mask)
+	return p.Bytes()
 }
 
 type timeoutError struct{}
@@ -213,4 +208,104 @@ func stacktrace() string {
 	x := make([]byte, 4096)
 	n := runtime.Stack(x, false)
 	return string(x[:n])
+}
+
+// WSWrite and WSRead are simple implementations of RFC6455
+// we assume that all payloads are 65535 bytes at max
+// we don't care control frames and everything is binary
+// we don't close it explicitly, it closes when the TCP connection closes
+// we don't ping or pong
+//
+//   0                   1                   2                   3
+//   0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+//   +-+-+-+-+-------+-+-------------+-------------------------------+
+//   |F|R|R|R| opcode|M| Payload len |    Extended payload length    |
+//   |I|S|S|S|  (4)  |A|     (7)     |             (16/64)           |
+//   |N|V|V|V|       |S|             |   (if payload len==126/127)   |
+//   | |1|2|3|       |K|             |                               |
+//   +-+-+-+-+-------+-+-------------+ - - - - - - - - - - - - - - - +
+//   |     Extended payload length continued, if payload len == 127  |
+//   + - - - - - - - - - - - - - - - +-------------------------------+
+//   |                               |Masking-key, if MASK set to 1  |
+//   +-------------------------------+-------------------------------+
+//   | Masking-key (continued)       |          Payload Data         |
+//   +-------------------------------- - - - - - - - - - - - - - - - +
+//   :                     Payload Data continued ...                :
+//   + - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - +
+//   |                     Payload Data continued ...                |
+//   +---------------------------------------------------------------+
+func WSWrite(dst io.Writer, payload []byte, mask bool) (n int, err error) {
+	if len(payload) > 65535 {
+		return 0, fmt.Errorf("don't support payload larger than 65535 yet")
+	}
+
+	buf := make([]byte, 4)
+	buf[0] = 2 // binary
+	buf[1] = 126
+	binary.BigEndian.PutUint16(buf[2:], uint16(len(payload)))
+
+	if mask {
+		buf[1] |= 0x80
+		buf = append(buf, 0, 0, 0, 0)
+		key := uint32(rand.GetCounter())
+		binary.BigEndian.PutUint32(buf[4:8], key)
+
+		for i, b := 0, buf[4:8]; i < len(payload); i++ {
+			payload[i] ^= b[i%4]
+		}
+	}
+
+	if n, err = dst.Write(buf); err != nil {
+		return
+	}
+
+	return dst.Write(payload)
+}
+
+func WSRead(src io.Reader) (payload []byte, n int, err error) {
+	buf := make([]byte, 4)
+	if n, err = io.ReadAtLeast(src, buf[:2], 2); err != nil {
+		return
+	}
+
+	if buf[0] != 2 {
+		err = fmt.Errorf("invalid websocket opcode: %v", buf[0])
+		return
+	}
+
+	mask := (buf[1] & 0x80) > 0
+	ln := int(buf[1] & 0x7f)
+
+	switch ln {
+	case 126:
+		if n, err = io.ReadAtLeast(src, buf[2:4], 2); err != nil {
+			return
+		}
+		ln = int(binary.BigEndian.Uint16(buf[2:4]))
+	case 127:
+		err = ErrLargeWrite
+		return
+	default:
+	}
+
+	if mask {
+		if n, err = io.ReadAtLeast(src, buf[:4], 4); err != nil {
+			return
+		}
+		// now buf contains mask key
+	}
+
+	payload = make([]byte, ln)
+	if n, err = io.ReadAtLeast(src, payload, ln); err != nil {
+		return
+	}
+
+	if mask {
+		for i, b := 0, buf[:4]; i < len(payload); i++ {
+			payload[i] ^= b[i%4]
+		}
+	}
+
+	// n == ln, err == nil,
+	return
 }

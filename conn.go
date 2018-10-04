@@ -3,7 +3,7 @@ package tcpmux
 import (
 	"encoding/binary"
 	"fmt"
-	"io"
+	"hash/crc32"
 	"log"
 	"net"
 	"sync"
@@ -79,38 +79,36 @@ func (cs *connState) start() {
 
 	for {
 		go func() {
-			buf := [8]byte{}
-			h := fnv32SH()
+			h := crc32.NewIEEE()
 
-			// cs.conn.SetReadDeadline(time.Now().Add(time.Duration(cs.timeout) * time.Second))
-			_, err := io.ReadAtLeast(cs.conn, buf[:], 8)
+			payload, n, err := WSRead(cs.conn)
 			if err != nil {
 				cs.broadcast(err)
 				return
 			}
 
-			hash := binary.BigEndian.Uint16(buf[:2])
-			streamIdx := binary.BigEndian.Uint32(buf[2:])
-			streamLen := int(binary.BigEndian.Uint16(buf[6:]))
+			hash := binary.BigEndian.Uint32(payload[:4])
+			h.Write(payload[4:])
+			xhash := h.Sum32()
+			streamIdx := binary.BigEndian.Uint32(payload[4:])
 
 			// it's a control frame
-			if buf[6] == cmdByte && buf[7] != 0 {
-				h.Write(buf[2:])
-				if xhash := uint16(h.Sum32()) | 0x8000; hash != xhash {
+			if n == 9 && payload[8] != cmdPayload {
+				if hash != xhash {
 					// if we found a invalid hash, then the whole connection is not stable any more
 					// broadcast this error and stop all
-					log.Println("invalid hash:", hash, xhash, buf)
+					log.Println("invalid hash:", hash, xhash, payload)
 					cs.broadcast(ErrInvalidHash)
 					return
 				}
 
-				switch buf[7] {
+				switch payload[8] {
 				case cmdHello:
 					// The stream will be added into connState in this callback
 					cs.newStreamCallback(notify{idx: streamIdx})
 
 					// We acknowledge the hello
-					if _, err = cs.conn.Write(makeFrame(streamIdx, cmdAck, nil)); err != nil {
+					if _, err = cs.conn.Write(makeFrame(streamIdx, cmdAck, false, nil)); err != nil {
 						cs.broadcast(err)
 						return
 					}
@@ -127,22 +125,17 @@ func (cs *connState) start() {
 						s.sendStateNonBlock(s.read, notify{flag: notifyRemoteClosed, src: 'm'})
 					}
 				default:
-					cs.broadcast(fmt.Errorf("unknown remote command: %d", buf[7]))
+					cs.broadcast(fmt.Errorf("unknown remote command: %d", payload[7]))
 				}
 
 				readChan <- true
 				return
 			}
 
-			payload := make([]byte, streamLen)
-			_, err = io.ReadAtLeast(cs.conn, payload, streamLen)
-
-			h.Write(buf[2:])
-			h.Write(payload)
-			if xhash := uint16(h.Sum32()) | 0x8000; hash != xhash {
+			if hash != xhash {
 				// if we found a invalid hash, then the whole connection is not stable any more
 				// broadcast this error and stop all
-				log.Println("invalid hash:", hash, xhash, buf)
+				log.Println("invalid hash:", hash, xhash, payload)
 				cs.broadcast(ErrInvalidHash)
 				return
 			}
@@ -157,11 +150,11 @@ func (cs *connState) start() {
 			if s, ok := cs.streams.Load(streamIdx); ok {
 				c := (*Stream)(s)
 				c.readmu.Lock()
-				c.readbuf = append(c.readbuf, payload...)
+				c.readbuf = append(c.readbuf, payload[9:]...)
 				c.readmu.Unlock()
 				c.sendStateNonBlock(c.read, rs)
 			} else {
-				if _, err = cs.conn.Write(makeFrame(streamIdx, cmdRemoteClosed, nil)); err != nil {
+				if _, err = cs.conn.Write(makeFrame(streamIdx, cmdRemoteClosed, false, nil)); err != nil {
 					cs.broadcast(err)
 					return
 				}

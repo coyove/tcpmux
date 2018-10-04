@@ -6,6 +6,7 @@ import (
 	"net"
 	"sync/atomic"
 	"time"
+	"unsafe"
 )
 
 type ListenPool struct {
@@ -106,7 +107,7 @@ ACCEPT:
 				continue ACCEPT
 			}
 
-			if ver < 128 {
+			if ver != 2 {
 				newCtr := atomic.AddUint32(&l.connsCtr, 1)
 				l.realConns.Store(newCtr, conn)
 				idx := uint64(newCtr) << 32
@@ -155,6 +156,13 @@ func (l *ListenPool) Addr() net.Addr {
 	return l.ln.Addr()
 }
 
-func (l *ListenPool) Count() (int, int, int) {
-	return len(l.newStreamWaiting), l.conns.Len(), l.streams.Len()
+func (l *ListenPool) Count() (int, int, []int) {
+	conns := make([]int, 0, l.conns.Len())
+
+	l.conns.IterateConst(func(id uint32, p unsafe.Pointer) bool {
+		conns = append(conns, (*connState)(p).streams.Len())
+		return true
+	})
+
+	return len(l.newStreamWaiting), l.streams.Len(), conns
 }
