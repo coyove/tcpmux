@@ -114,7 +114,6 @@ func TestHTTPServer(t *testing.T) {
 	start := time.Now()
 	for {
 		wg := &sync.WaitGroup{}
-
 		if time.Now().Sub(start).Seconds() > 590 { // < 10 min, so we won't get killed by the go tester
 			break
 		}

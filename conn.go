@@ -3,7 +3,6 @@ package tcpmux
 import (
 	"encoding/binary"
 	"fmt"
-	"hash/crc32"
 	"log"
 	"net"
 	"sync"
@@ -18,8 +17,10 @@ type connState struct {
 	idx      uint32
 	timeout  uint32
 	exitRead chan bool
+	key      []byte
 
 	newStreamCallback func(state notify)
+	Sum32             func([]byte, []byte) uint32
 	ErrorCallback     func(error) bool
 
 	stopped bool
@@ -41,6 +42,10 @@ func (cs *connState) broadcast(err error) {
 	})
 
 	cs.stop()
+}
+
+func (cs *connState) writeFrame(idx uint32, cmd byte, mask bool, payload []byte) (int, error) {
+	return cs.conn.Write(cs.makeFrame(idx, cmd, mask, payload))
 }
 
 func (cs *connState) start() {
@@ -79,8 +84,6 @@ func (cs *connState) start() {
 
 	for {
 		go func() {
-			h := crc32.NewIEEE()
-
 			payload, n, err := WSRead(cs.conn)
 			if err != nil {
 				cs.broadcast(err)
@@ -88,8 +91,7 @@ func (cs *connState) start() {
 			}
 
 			hash := binary.BigEndian.Uint32(payload[:4])
-			h.Write(payload[4:])
-			xhash := h.Sum32()
+			xhash := cs.Sum32(payload[4:], cs.key)
 			streamIdx := binary.BigEndian.Uint32(payload[4:])
 
 			// it's a control frame
@@ -108,7 +110,7 @@ func (cs *connState) start() {
 					cs.newStreamCallback(notify{idx: streamIdx})
 
 					// We acknowledge the hello
-					if _, err = cs.conn.Write(makeFrame(streamIdx, cmdAck, false, nil)); err != nil {
+					if _, err = cs.writeFrame(streamIdx, cmdAck, false, nil); err != nil {
 						cs.broadcast(err)
 						return
 					}
@@ -154,7 +156,7 @@ func (cs *connState) start() {
 				c.readmu.Unlock()
 				c.sendStateNonBlock(c.read, rs)
 			} else {
-				if _, err = cs.conn.Write(makeFrame(streamIdx, cmdRemoteClosed, false, nil)); err != nil {
+				if _, err = cs.writeFrame(streamIdx, cmdRemoteClosed, false, nil); err != nil {
 					cs.broadcast(err)
 					return
 				}

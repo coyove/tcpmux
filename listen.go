@@ -26,6 +26,7 @@ type ListenPool struct {
 	acceptErr chan error
 
 	ErrorCallback func(error) bool
+	Key           []byte
 }
 
 func Listen(addr string, pooling bool) (net.Listener, error) {
@@ -70,6 +71,7 @@ func (l *ListenPool) Upgrade(conn net.Conn) {
 		exitRead:      make(chan bool),
 		timeout:       streamTimeout,
 		streams:       Map32{}.New(),
+		key:           l.Key,
 		newStreamCallback: func(state notify) {
 			idx := state.idx
 			s := newStream(idx, c)
@@ -79,6 +81,12 @@ func (l *ListenPool) Upgrade(conn net.Conn) {
 			l.streams.Store(idx, s)
 			l.newStreamWaiting <- uint64(idx)
 		},
+	}
+
+	if l.Key != nil {
+		c.Sum32 = sumHMACsha256
+	} else {
+		c.Sum32 = sumCRC32
 	}
 
 	l.conns.Store(counter, c)

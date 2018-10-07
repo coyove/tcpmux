@@ -24,6 +24,7 @@ type DialPool struct {
 	OnError  func(error) bool
 	OnDialed func(conn net.Conn)
 	OnDial   func(address string) (net.Conn, error)
+	Key      []byte
 }
 
 // NewDialer creates a new DialPool, set poolSize to 0 to disable pooling
@@ -68,7 +69,7 @@ func (d *DialPool) DialTimeout(timeout time.Duration) (net.Conn, error) {
 		s.tag = 'c'
 		c.streams.Store(s.streamIdx, s)
 
-		_, err := c.conn.Write(makeFrame(s.streamIdx, cmdHello, true, nil))
+		_, err := c.conn.Write(c.makeFrame(s.streamIdx, cmdHello, true, nil))
 		if err != nil {
 			c.broadcast(err)
 			return nil, err
@@ -106,7 +107,14 @@ func (d *DialPool) DialTimeout(timeout time.Duration) (net.Conn, error) {
 			streams:       Map32{}.New(),
 			master:        d.conns,
 			timeout:       MasterTimeout,
+			key:           d.Key,
 			ErrorCallback: d.OnError,
+		}
+
+		if d.Key != nil {
+			c.Sum32 = sumHMACsha256
+		} else {
+			c.Sum32 = sumCRC32
 		}
 
 		d.conns.m[c.idx] = unsafe.Pointer(c)

@@ -2,6 +2,8 @@ package tcpmux
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -59,15 +61,13 @@ var (
 	ErrLargeWrite = errors.New("can't write large buffer which exceeds 65535 bytes")
 )
 
-func makeFrame(idx uint32, cmd byte, mask bool, payload []byte) []byte {
-	h := crc32.NewIEEE()
+func (conn *connState) makeFrame(idx uint32, cmd byte, mask bool, payload []byte) []byte {
 	p := &bytes.Buffer{}
 
 	if cmd != 0 {
 		buf := []byte{0, 0, 0, 0, 0, 0, 0, 0, cmd}
 		binary.BigEndian.PutUint32(buf[4:], idx)
-		h.Write(buf[4:])
-		binary.BigEndian.PutUint32(buf[:4], h.Sum32())
+		binary.BigEndian.PutUint32(buf[:4], conn.Sum32(buf[4:], conn.key))
 
 		WSWrite(p, buf, mask)
 		return p.Bytes()
@@ -78,8 +78,7 @@ func makeFrame(idx uint32, cmd byte, mask bool, payload []byte) []byte {
 	header[8] = cmdPayload
 	copy(header[9:], payload)
 
-	h.Write(header[4:])
-	binary.BigEndian.PutUint32(header[:4], h.Sum32())
+	binary.BigEndian.PutUint32(header[:4], conn.Sum32(header[4:], conn.key))
 
 	WSWrite(p, header, mask)
 	return p.Bytes()
@@ -308,4 +307,16 @@ func WSRead(src io.Reader) (payload []byte, n int, err error) {
 
 	// n == ln, err == nil,
 	return
+}
+
+func sumCRC32(p, key []byte) uint32 {
+	h := crc32.NewIEEE()
+	h.Write(p)
+	return h.Sum32()
+}
+
+func sumHMACsha256(p, key []byte) uint32 {
+	h := hmac.New(sha256.New, key)
+	p = h.Sum(p)
+	return binary.BigEndian.Uint32(p[:4])
 }
