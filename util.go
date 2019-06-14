@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"unsafe"
 
@@ -37,6 +39,7 @@ const (
 	notifyCancel
 	notifyError
 	notifyReady
+	notifyAck
 )
 
 const (
@@ -319,4 +322,19 @@ func sumHMACsha256(p, key []byte) uint32 {
 	h := hmac.New(sha256.New, key)
 	p = h.Sum(p)
 	return binary.BigEndian.Uint32(p[:4])
+}
+
+func debugprint(v ...interface{}) {
+	src, i := bytes.Buffer{}, 1
+	for {
+		_, fn, line, _ := runtime.Caller(i)
+		if !strings.Contains(fn, "coyove") {
+			break
+		}
+		fn = filepath.Base(fn)
+		i++
+		src.WriteString(fmt.Sprintf("%s:%d/", fn, line))
+	}
+	src.Truncate(src.Len() - 1)
+	fmt.Println(src.String(), "]\n\t", fmt.Sprint(v...))
 }

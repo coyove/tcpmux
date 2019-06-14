@@ -68,14 +68,18 @@ func (l *ListenPool) Upgrade(conn net.Conn) {
 		idx:           counter,
 		conn:          conn,
 		master:        l.conns,
-		exitRead:      make(chan bool),
+		exitWrite:     make(chan bool),
+		writeQueue:    make(chan writePending, 1024),
 		timeout:       streamTimeout,
 		streams:       Map32{}.New(),
 		key:           l.Key,
+		tag:           's',
 		newStreamCallback: func(state notify) {
 			idx := state.idx
 			s := newStream(idx, c)
 			s.tag = 's'
+
+			debugprint("new stream received: ", s)
 
 			c.streams.Store(idx, s)
 			l.streams.Store(idx, s)
@@ -90,7 +94,7 @@ func (l *ListenPool) Upgrade(conn net.Conn) {
 	}
 
 	l.conns.Store(counter, c)
-	go c.start()
+	c.start()
 }
 
 func (l *ListenPool) accept() {
@@ -106,6 +110,7 @@ ACCEPT:
 				return
 			}
 
+			debugprint("listen: accept raw TCP connection: ", _conn)
 			conn := &Conn{Conn: _conn}
 
 			conn.SetReadDeadline(time.Now().Add(pingInterval * time.Second))
@@ -155,6 +160,7 @@ func (l *ListenPool) Accept() (net.Conn, error) {
 }
 
 func (l *ListenPool) Close() error {
+	debugprint("listener closing")
 	l.exit <- true
 	l.exitA <- true
 	return l.ln.Close()

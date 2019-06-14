@@ -8,6 +8,7 @@ import (
 	"unsafe"
 
 	"github.com/coyove/common/rand"
+	"github.com/coyove/common/waitobject"
 )
 
 var MasterTimeout uint32 = 20
@@ -69,33 +70,28 @@ func (d *DialPool) DialTimeout(timeout time.Duration) (net.Conn, error) {
 		s.tag = 'c'
 		c.streams.Store(s.streamIdx, s)
 
+		debugprint("dial new stream: ", s)
+
 		_, err := c.conn.Write(c.makeFrame(s.streamIdx, cmdHello, true, nil))
 		if err != nil {
-			c.broadcast(err)
+			c.broadcastErrAndStop(err)
 			return nil, err
 		}
 
 		// After sending the hello, we wait for the ack, or timed out
+		waitdeadline := waitobject.Eternal
 		if timeout != 0 {
-			select {
-			case resp := <-s.read:
-				if !resp.ack {
-					return nil, ErrStreamLost
-				}
-			case <-time.After(timeout):
-				return nil, &timeoutError{}
-			}
-		} else {
-			// log.Println("?", s.streamIdx)
-			select {
-			case resp := <-s.read:
-				if !resp.ack {
-					return nil, ErrStreamLost
-				}
-			}
-			// log.Println("!")
+			waitdeadline = time.Now().Add(timeout)
 		}
 
+		s.read.SetWaitDeadline(waitdeadline)
+		v, ontime := s.read.Wait()
+		if !ontime {
+			return nil, &timeoutError{}
+		}
+		if v.(notify).flag != notifyAck {
+			return nil, ErrStreamLost
+		}
 		return s, nil
 	}
 
@@ -103,11 +99,13 @@ func (d *DialPool) DialTimeout(timeout time.Duration) (net.Conn, error) {
 	if len(d.conns.m) < int(d.maxConns) {
 		c := &connState{
 			idx:           atomic.AddUint32(&d.connsCtr, 1),
-			exitRead:      make(chan bool),
+			exitWrite:     make(chan bool),
+			writeQueue:    make(chan writePending, 1024),
 			streams:       Map32{}.New(),
 			master:        d.conns,
 			timeout:       MasterTimeout,
 			key:           d.Key,
+			tag:           'c',
 			ErrorCallback: d.OnError,
 		}
 
@@ -141,7 +139,7 @@ func (d *DialPool) DialTimeout(timeout time.Duration) (net.Conn, error) {
 		}
 
 		c.conn = conn
-		go c.start()
+		c.start()
 
 		return newStreamAndSayHello(c)
 	}

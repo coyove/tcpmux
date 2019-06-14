@@ -23,8 +23,8 @@ func TestTCPServerCloseWhenWrite(t *testing.T) {
 		}
 
 		conn.Close()
-		ln.Close()
 		exit <- true
+		ln.Close()
 	}()
 
 	select {
@@ -32,10 +32,13 @@ func TestTCPServerCloseWhenWrite(t *testing.T) {
 	}
 
 	d := NewDialer("127.0.0.1:13739", 1)
-	conn, _ := d.Dial()
+	conn, err := d.Dial()
 
-	_, err := conn.Read([]byte{})
+	if err != nil {
+		t.Fatal(err)
+	}
 
+	_, err = conn.Read([]byte{})
 	if err != io.EOF {
 		panic(err)
 	}
