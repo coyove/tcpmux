@@ -12,29 +12,41 @@ import (
 
 type notify struct {
 	err  error
-	idx  uint32
-	ack  bool
-	flag byte
-	src  byte
+	flag notifyFlag
 }
 
 type Stream struct {
-	master       *connState
-	readbuf      []byte
-	readmu       sync.Mutex
-	writemu      sync.Mutex
-	read         *waitobject.Object
-	write        *waitobject.Object
-	streamIdx    uint32
-	lastActive   uint32
-	closed       bool
-	remoteClosed bool
-	tag          byte
-	timeout      uint32
+	master     *connState
+	readbuf    []byte
+	readmu     sync.Mutex
+	writemu    sync.Mutex
+	read       *waitobject.Object
+	write      *waitobject.Object
+	streamIdx  uint32
+	lastActive uint32
+	tag        byte
+	timeout    uint32
 }
 
 func timeNow() uint32 {
 	return uint32(time.Now().Unix())
+}
+
+func touch(obj *waitobject.Object, n notify) {
+	obj.Touch(func(o interface{}) interface{} {
+		if o == nil {
+			return n
+		}
+
+		no := o.(notify)
+		if no.err == nil {
+			no.err = n.err
+		}
+		old := no.flag
+		no.flag |= n.flag
+		debugprint("touch, old: ", old, ", new: ", no.flag)
+		return no
+	})
 }
 
 func newStream(id uint32, c *connState) *Stream {
@@ -53,69 +65,106 @@ func newStream(id uint32, c *connState) *Stream {
 func (c *Stream) Read(buf []byte) (n int, err error) {
 	c.lastActive = timeNow()
 
+	if c.read.IsTimedout() {
+		return 0, &timeoutError{}
+	}
+
 READ:
 	c.readmu.Lock()
 	if len(c.readbuf) > 0 {
 		n = copy(buf, c.readbuf)
 		c.readbuf = c.readbuf[n:]
 		c.readmu.Unlock()
+		debugprint(c, " finished reading: ", n, " - ", string(buf[:n]))
 		return
 	}
 	c.readmu.Unlock()
 
-	if c.closed {
-		return 0, ErrConnClosed
-	}
-	if c.remoteClosed {
-		return 0, io.EOF
+	oldv := c.read.SetValue(nil)
+	if x, _ := oldv.(notify); x.flag > 0 {
+		if x.flag&notifyClose > 0 {
+			return 0, io.EOF
+		}
+		if x.flag&notifyError > 0 {
+			return 0, x.err
+		}
 	}
 
+	debugprint(c, " waits reading")
 	v, ontime := c.read.Wait()
 	if !ontime {
 		// a timeout signal may be triggerred by:
 		//  1. a real timedout event
 		//  2. someone canceled/closed the object explicitly
+		debugprint(c, " waitobject timeout")
 		return 0, &timeoutError{}
 	}
 
-	switch x := v.(notify); x.flag {
-	case notifyReady:
+	switch x := v.(notify); {
+	case x.flag&notifyReady > 0:
 		// data is ready, read them
+		c.read.SetValue(func(v interface{}) interface{} {
+			x.flag ^= notifyReady
+			return x
+		})
 		goto READ
-	case notifyRemoteClosed:
-		c.remoteClosed = true
+	case x.flag&notifyClose > 0:
 		return 0, io.EOF
-	case notifyClose:
-		c.closed = true
-		return 0, ErrConnClosed
-	case notifyCancel:
+	case x.flag&notifyCancel > 0:
 		return 0, &timeoutError{}
-	case notifyError:
+	case x.flag&notifyError > 0:
 		return 0, x.err
+	case x.flag&notifyAck > 0:
+		// Continux waiting
+		goto READ
 	default:
-		panic("shouldn't happen")
+		panic(byte(x.flag))
 	}
 }
 
 func (c *Stream) Write(buf []byte) (n int, err error) {
 	c.lastActive = timeNow()
 
+	if c.write.IsTimedout() {
+		return 0, &timeoutError{}
+	}
+
+	oldv := c.read.SetValue(nil)
+	if x, _ := oldv.(notify); x.flag > 0 {
+		if x.flag&notifyClose > 0 {
+			return 0, io.EOF
+		}
+		if x.flag&notifyError > 0 {
+			return 0, x.err
+		}
+	}
+
 	c.writemu.Lock()
 	defer c.writemu.Unlock()
 
-	if c.closed {
-		return 0, ErrConnClosed
-	}
-	if c.remoteClosed {
-		return len(buf), nil
-	}
+	defer func() {
+		if r := recover(); r != nil {
+			if fmt.Sprintf("%v", r) == "send on closed channel" {
+				n, err = 0, io.EOF
+			} else {
+				panic(r)
+			}
+		}
+	}()
 
 	c.master.writeQueue <- writePending{
 		data: c.master.makeFrame(c.streamIdx, cmdPayload, c.tag == 'c', buf),
 		obj:  c.write,
 	}
 
-	v, ontime := c.write.Wait()
+	debugprint(c, " waits writing")
+	v, ontime := c.write.Wait(func(v interface{}) waitobject.WaitReturn {
+		if n, _ := v.(notify); n.flag <= notifyClose && n.flag > 0 {
+			// Close or Error
+			return waitobject.DoNotWait
+		}
+		return waitobject.Wait
+	})
 	if !ontime {
 		// a timeout signal may be triggerred by:
 		//  1. a real timedout event
@@ -123,20 +172,23 @@ func (c *Stream) Write(buf []byte) (n int, err error) {
 		return 0, &timeoutError{}
 	}
 
-	switch x := v.(notify); x.flag {
-	case notifyReady:
+	debugprint(c, " waits writing finished")
+	switch x := v.(notify); {
+	case x.flag&notifyReady > 0:
 		// data is sent already
+		debugprint(c, " waits writing finished: ", string(buf))
+		c.write.SetValue(func(v interface{}) interface{} {
+			n := v.(notify)
+			n.flag &= ^notifyReady
+			return n
+		})
 		n = len(buf)
 		return
-	case notifyRemoteClosed:
-		c.remoteClosed = true
+	case x.flag&notifyClose > 0:
 		return 0, io.EOF
-	case notifyClose:
-		c.closed = true
-		return 0, ErrConnClosed
-	case notifyCancel:
+	case x.flag&notifyCancel > 0:
 		return 0, &timeoutError{}
-	case notifyError:
+	case x.flag&notifyError > 0:
 		return 0, x.err
 	default:
 		panic("shouldn't happen")
@@ -150,22 +202,23 @@ func (c *Stream) String() string {
 func (c *Stream) closeNoInfo() {
 	debugprint(c, ", touching before closing")
 
-	n := notify{flag: notifyClose, src: 'c'}
-	c.closed = true
-	c.write.Touch(n)
-	c.read.Touch(n)
+	n := notify{flag: notifyClose}
+	touch(c.write, n)
+	touch(c.read, n)
 }
 
 // Close closes the stream and remove it from its master
 func (c *Stream) Close() error {
+	debugprint(c, ", closing")
 	c.closeNoInfo()
+	c.master.streams.Delete(c.streamIdx)
 
-	if _, err := c.master.conn.Write(c.master.makeFrame(c.streamIdx, cmdRemoteClosed, c.tag == 'c', nil)); err != nil {
+	frame := c.master.makeFrame(c.streamIdx, cmdRemoteClosed, c.tag == 'c', nil)
+	if _, err := c.master.conn.Write(frame); err != nil {
 		c.master.broadcastErrAndStop(err)
+		return err
 	}
 
-	debugprint(c, ", closing")
-	c.master.streams.Delete(c.streamIdx)
 	return nil
 }
 

@@ -89,6 +89,7 @@ func (d *DialPool) DialTimeout(timeout time.Duration) (net.Conn, error) {
 		if !ontime {
 			return nil, &timeoutError{}
 		}
+		debugprint(s, " receive first handshak: ", v.(notify).flag == notifyAck)
 		if v.(notify).flag != notifyAck {
 			return nil, ErrStreamLost
 		}

@@ -8,9 +8,11 @@ import (
 	"net/http"
 	"sync"
 	"testing"
+	"time"
 )
 
 func getListerner() net.Listener {
+	time.Sleep(time.Millisecond * 500) // Wait last listener closed
 	ln, err := Listen(":13739", true)
 	if err != nil {
 		panic(err)

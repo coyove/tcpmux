@@ -11,7 +11,6 @@ import (
 	"io"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"sync"
 	"unsafe"
 
@@ -33,11 +32,36 @@ const (
 	cmdPayload
 )
 
+type notifyFlag byte
+
+func (nf notifyFlag) String() string {
+	p := bytes.Buffer{}
+	for i := 0; i < 8; i++ {
+		n := notifyFlag(1 << uint(i))
+		if nf&n > 0 {
+			switch n {
+			case notifyError:
+				p.WriteString("Error")
+			case notifyClose:
+				p.WriteString("Close")
+			case notifyCancel:
+				p.WriteString("Cancel")
+			case notifyAck:
+				p.WriteString("Ack")
+			case notifyReady:
+				p.WriteString("Ready")
+			default:
+				p.WriteString("Unknown")
+			}
+		}
+	}
+	return p.String()
+}
+
 const (
-	notifyRemoteClosed = 1 << iota
+	notifyError notifyFlag = 1 << iota
 	notifyClose
 	notifyCancel
-	notifyError
 	notifyReady
 	notifyAck
 )
@@ -67,7 +91,7 @@ var (
 func (conn *connState) makeFrame(idx uint32, cmd byte, mask bool, payload []byte) []byte {
 	p := &bytes.Buffer{}
 
-	if cmd != 0 {
+	if cmd != cmdPayload {
 		buf := []byte{0, 0, 0, 0, 0, 0, 0, 0, cmd}
 		binary.BigEndian.PutUint32(buf[4:], idx)
 		binary.BigEndian.PutUint32(buf[:4], conn.Sum32(buf[4:], conn.key))
@@ -94,21 +118,6 @@ func (e *timeoutError) Error() string { return "operation timed out" }
 func (e *timeoutError) Timeout() bool { return true }
 
 func (e *timeoutError) Temporary() bool { return false }
-
-func clearCancel(queue chan byte) {
-	select {
-	case code := <-queue:
-		if code == notifyCancel {
-			return
-		}
-
-		select {
-		case queue <- code:
-		default:
-		}
-	default:
-	}
-}
 
 // Map32 is a mapping from uint32 to unsafe.Pointer
 type Map32 struct {
@@ -324,17 +333,27 @@ func sumHMACsha256(p, key []byte) uint32 {
 	return binary.BigEndian.Uint32(p[:4])
 }
 
+var debug = false
+
 func debugprint(v ...interface{}) {
+	if !debug {
+		return
+	} else {
+		//		time.Sleep(time.Millisecond * 100)
+		//return
+	}
+
 	src, i := bytes.Buffer{}, 1
 	for {
-		_, fn, line, _ := runtime.Caller(i)
-		if !strings.Contains(fn, "coyove") {
+		_, fn, line, ok := runtime.Caller(i)
+		if !ok {
 			break
 		}
-		fn = filepath.Base(fn)
 		i++
-		src.WriteString(fmt.Sprintf("%s:%d/", fn, line))
+		src.WriteString(fmt.Sprintf("%s:%d/", filepath.Base(fn), line))
 	}
-	src.Truncate(src.Len() - 1)
+	if src.Len() > 0 {
+		src.Truncate(src.Len() - 1)
+	}
 	fmt.Println(src.String(), "]\n\t", fmt.Sprint(v...))
 }

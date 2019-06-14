@@ -74,8 +74,7 @@ func (l *ListenPool) Upgrade(conn net.Conn) {
 		streams:       Map32{}.New(),
 		key:           l.Key,
 		tag:           's',
-		newStreamCallback: func(state notify) {
-			idx := state.idx
+		newStreamCallback: func(idx uint32) {
 			s := newStream(idx, c)
 			s.tag = 's'
 

@@ -1,10 +1,13 @@
 package tcpmux
 
 import (
+	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
-	"strings"
+	"os"
+	"runtime/pprof"
 	"sync"
 	"testing"
 	"time"
@@ -25,6 +28,7 @@ func TestTCPServerCloseWhenWrite(t *testing.T) {
 		conn.Close()
 		exit <- true
 		ln.Close()
+		exit <- true
 	}()
 
 	select {
@@ -40,9 +44,13 @@ func TestTCPServerCloseWhenWrite(t *testing.T) {
 
 	_, err = conn.Read([]byte{})
 	if err != io.EOF {
-		panic(err)
+		t.Fatal(err)
 	}
 	conn.Close()
+
+	select {
+	case <-exit:
+	}
 
 	select {
 	case <-exit:
@@ -144,6 +152,16 @@ func (c *testConnReadHook) Read(buf []byte) (int, error) {
 // }
 
 func TestHTTPServerConnClosed(t *testing.T) {
+	debug = true
+	go func() {
+		for {
+			time.Sleep(2 * time.Second)
+			f, _ := os.Create("heap.txt")
+			pprof.Lookup("goroutine").WriteTo(f, 1)
+			fmt.Println("profile")
+		}
+	}()
+
 	var ln net.Listener
 	ready := make(chan bool)
 	go func() {
@@ -185,12 +203,8 @@ func TestHTTPServerConnClosed(t *testing.T) {
 		_, err := client.Get("http://127.0.0.1:13739/")
 
 		if err != nil {
-			if ne, _ := err.(net.Error); (ne != nil && ne.Timeout()) ||
-				strings.Contains(err.Error(), ErrConnClosed.Error()) {
-				exit = true
-			} else {
-				panic(err)
-			}
+			exit = true
+			t.Log(err)
 		}
 
 		wg.Done()
@@ -248,6 +262,7 @@ func TestReadDeadline(t *testing.T) {
 	case <-ready:
 	}
 
+	//debug = true
 	p := NewDialer(":13739", 10)
 	conn, err := p.Dial()
 	if err != nil {
@@ -263,6 +278,60 @@ func TestReadDeadline(t *testing.T) {
 
 	time.Sleep(2 * time.Second)
 	_, err = (conn.Read(buf))
+	if !err.(net.Error).Timeout() {
+		t.Fatal("failed")
+	}
+
+	conn.SetReadDeadline(time.Time{})
+	n, err := conn.Read(buf)
+	if n != 1 || err != nil {
+		t.Fatal("failed")
+	}
+
+	_, err = conn.Read(buf)
+	if err != io.EOF {
+		t.Fatal("failed")
+	}
+
+	conn.Close()
+}
+
+func TestReadDeadlineNet(t *testing.T) {
+	ready := make(chan bool, 1)
+	go func() {
+		ln, _ := net.Listen("tcp", ":13739")
+		ready <- true
+		conn, err := ln.Accept()
+		if err != nil {
+			panic(err)
+		}
+
+		time.Sleep(2 * time.Second)
+		conn.Write([]byte{1})
+		conn.Close()
+		ln.Close()
+	}()
+
+	select {
+	case <-ready:
+	}
+
+	// debug = true
+	conn, err := net.Dial("tcp", ":13739")
+	if err != nil {
+		panic(err)
+	}
+
+	buf := []byte{0}
+	conn.SetReadDeadline(time.Now().Add(time.Second))
+	_, err = conn.Read(buf)
+	if !err.(net.Error).Timeout() {
+		t.Fatal("failed")
+	}
+
+	time.Sleep(2 * time.Second)
+	_, err = (conn.Read(buf))
+	log.Println(buf)
 	if !err.(net.Error).Timeout() {
 		t.Fatal("failed")
 	}

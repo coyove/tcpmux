@@ -4,8 +4,9 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
-	"sync"
 	"unsafe"
+
+	sync "github.com/sasha-s/go-deadlock"
 
 	"github.com/coyove/common/waitobject"
 )
@@ -24,7 +25,7 @@ type connState struct {
 	exitRead chan bool
 	key      []byte
 
-	newStreamCallback func(state notify)
+	newStreamCallback func(steamIdx uint32)
 	Sum32             func([]byte, []byte) uint32
 	ErrorCallback     func(error) bool
 
@@ -39,35 +40,26 @@ type connState struct {
 // When something serious happened, we broadcast it to every stream and close the master conn
 // TCP connections may have temporary errors, but here we treat them as the same as other failures
 func (cs *connState) broadcastErrAndStop(err error) {
-	if cs.ErrorCallback != nil {
-		cs.ErrorCallback(err)
+	cs.Lock()
+	if cs.stopped {
+		cs.Unlock()
+		return
 	}
+
+	cs.conn.Close()
+	close(cs.writeQueue)
+	cs.master.Delete(cs.idx)
+	cs.stopped = true
+	cs.Unlock()
 
 	n := notify{flag: notifyError, err: err}
 	cs.streams.Iterate(func(idx uint32, s unsafe.Pointer) bool {
 		c := (*Stream)(s)
-		c.read.Touch(n)
-		c.write.Touch(n)
+		touch(c.read, n)
+		touch(c.write, n)
+		c.closeNoInfo()
 		return true
 	})
-
-	cs.Lock()
-	defer cs.Unlock()
-
-	if cs.stopped {
-		return
-	}
-
-	cs.streams.Iterate(func(idx uint32, p unsafe.Pointer) bool {
-		s := (*Stream)(p)
-		s.closeNoInfo()
-		return true
-	})
-
-	cs.exitWrite <- true
-	cs.conn.Close()
-	cs.master.Delete(cs.idx)
-	cs.stopped = true
 }
 
 func (cs *connState) start() {
@@ -102,7 +94,7 @@ func (cs *connState) readLoop() {
 			switch payload[8] {
 			case cmdHello:
 				// The stream will be added into connState in this callback
-				cs.newStreamCallback(notify{idx: streamIdx})
+				cs.newStreamCallback(streamIdx)
 
 				// We acknowledge the hello
 				if _, err = cs.conn.Write(cs.makeFrame(streamIdx, cmdAck, false, nil)); err != nil {
@@ -113,17 +105,17 @@ func (cs *connState) readLoop() {
 				debugprint(cs, ", stream: ", streamIdx, ", received hello")
 			case cmdAck:
 				if p, ok := cs.streams.Load(streamIdx); ok {
-					((*Stream)(p)).read.Touch(notify{flag: notifyAck})
+					touch(((*Stream)(p)).read, notify{flag: notifyAck})
 				}
 				debugprint(cs, ", stream: ", streamIdx, ", received ack")
 			case cmdRemoteClosed:
-				if p, ok := cs.streams.Load(streamIdx); ok {
+				if p, ok := cs.streams.Fetch(streamIdx); ok {
 					s := (*Stream)(p)
 					// log.Println("receive remote close", string(s.tag), s.streamIdx)
 					// Inform the stream that its remote has closed itself
-					n := notify{flag: notifyRemoteClosed, src: 'm'}
-					s.read.Touch(n)
-					s.write.Touch(n)
+					n := notify{flag: notifyClose}
+					touch(s.read, n)
+					touch(s.write, n)
 				}
 				debugprint(cs, ", stream: ", streamIdx, ", remote stream has been closed")
 			default:
@@ -137,9 +129,9 @@ func (cs *connState) readLoop() {
 			c := (*Stream)(s)
 			c.readmu.Lock()
 			c.readbuf = append(c.readbuf, payload[9:]...)
+			debugprint(cs, ", stream: ", streamIdx, ", read ready: ", n, " - ", string(c.readbuf))
 			c.readmu.Unlock()
-			c.read.Touch(notify{flag: notifyReady})
-			debugprint(cs, ", stream: ", streamIdx, ", read ready: ", payload[9:])
+			touch(c.read, notify{flag: notifyReady})
 		} else {
 			if _, err = cs.conn.Write(cs.makeFrame(streamIdx, cmdRemoteClosed, false, nil)); err != nil {
 				cs.broadcastErrAndStop(err)
@@ -153,15 +145,16 @@ func (cs *connState) readLoop() {
 func (cs *connState) writeLoop() {
 	for {
 		select {
-		case wp := <-cs.writeQueue:
+		case wp, ok := <-cs.writeQueue:
+			if !ok {
+				return
+			}
 			_, err := cs.conn.Write(wp.data)
 			if err != nil {
 				cs.broadcastErrAndStop(err)
 				return
 			}
-			wp.obj.Touch(notify{flag: notifyReady})
-		case <-cs.exitWrite:
-			return
+			touch(wp.obj, notify{flag: notifyReady})
 		}
 	}
 }

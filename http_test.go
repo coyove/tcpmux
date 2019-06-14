@@ -1,6 +1,7 @@
 package tcpmux
 
 import (
+	"fmt"
 	"io/ioutil"
 	"log"
 	"math/rand"
@@ -75,16 +76,6 @@ func TestHTTPServer(t *testing.T) {
 		resp, err := client.Get("http://127.0.0.1:13739/" + str)
 
 		if err != nil {
-			// time.Sleep(time.Second)
-			// for _, s := range streamMapping {
-			// 	logg.D(s.streamIdx)
-			// 	for len(s.readResp) > 0 {
-			// 		logg.D(<-s.readResp)
-			// 	}
-
-			// 	logg.D(s.lastResp)
-			// 	logg.D("==================")
-			// }
 			panic(err.(*url.Error).Err)
 		}
 
@@ -104,17 +95,18 @@ func TestHTTPServer(t *testing.T) {
 	go func() {
 		for {
 			time.Sleep(2 * time.Second)
-			//p.conns[1].conn.Close()
 			f, _ := os.Create("heap.txt")
-			pprof.Lookup("heap").WriteTo(f, 1)
-			// debug.WriteHeapDump(f.Fd())
+			pprof.Lookup("goroutine").WriteTo(f, 1)
+			fmt.Println("profile")
 		}
 	}()
 
+	//debug = true
 	start := time.Now()
+	count := 0
 	for {
 		wg := &sync.WaitGroup{}
-		if time.Now().Sub(start).Seconds() > 590 { // < 10 min, so we won't get killed by the go tester
+		if time.Now().Sub(start).Seconds() > 190 { // < 10 min, so we won't get killed by the go tester
 			break
 		}
 
@@ -123,7 +115,10 @@ func TestHTTPServer(t *testing.T) {
 			go test(wg)
 		}
 		wg.Wait()
-		// log.Println("=============================")
+
+		if count++; count%100 == 0 {
+			//		log.Println(strings.Repeat("=", 20), count)
+		}
 		//logg.D(p.Count())
 	}
 
