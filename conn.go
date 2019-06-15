@@ -48,7 +48,6 @@ func (cs *connState) broadcastErrAndStop(err error) {
 			c := (*Stream)(s)
 			touch(c.read, n)
 			touch(c.write, n)
-			c.closeNoInfo()
 			return true
 		})
 	})

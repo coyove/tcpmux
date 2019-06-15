@@ -186,18 +186,14 @@ func (c *Stream) String() string {
 	return fmt.Sprintf("<stream_%d_%s>", c.streamIdx, string(c.tag))
 }
 
-func (c *Stream) closeNoInfo() {
-	debugprint(c, ", touching before closing")
+// Close closes the stream and remove it from its master
+func (c *Stream) Close() error {
+	debugprint(c, ", closing")
 
 	n := notify{flag: notifyClose}
 	touch(c.write, n)
 	touch(c.read, n)
-}
 
-// Close closes the stream and remove it from its master
-func (c *Stream) Close() error {
-	debugprint(c, ", closing")
-	c.closeNoInfo()
 	c.master.streams.Delete(c.streamIdx)
 
 	frame := c.master.makeFrame(c.streamIdx, cmdRemoteClosed, c.tag == 'c', nil)
