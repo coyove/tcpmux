@@ -44,8 +44,6 @@ func (nf notifyFlag) String() string {
 				p.WriteString("Error")
 			case notifyClose:
 				p.WriteString("Close")
-			case notifyCancel:
-				p.WriteString("Cancel")
 			case notifyAck:
 				p.WriteString("Ack")
 			case notifyReady:
@@ -61,14 +59,8 @@ func (nf notifyFlag) String() string {
 const (
 	notifyError notifyFlag = 1 << iota
 	notifyClose
-	notifyCancel
 	notifyReady
 	notifyAck
-)
-
-const (
-	// OptErrWhenClosed lets Read() and Write() report ErrConnClosed when remote closed
-	OptErrWhenClosed = 1 << iota
 )
 
 var (

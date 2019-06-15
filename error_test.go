@@ -152,7 +152,7 @@ func (c *testConnReadHook) Read(buf []byte) (int, error) {
 // }
 
 func TestHTTPServerConnClosed(t *testing.T) {
-	debug = true
+	//debug = true
 	go func() {
 		for {
 			time.Sleep(2 * time.Second)

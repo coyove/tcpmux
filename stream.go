@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,6 +31,12 @@ type Stream struct {
 
 func timeNow() uint32 {
 	return uint32(time.Now().Unix())
+}
+
+func clearNotifyReadyFlag(v interface{}) interface{} {
+	n := v.(notify)
+	n.flag &= ^notifyReady
+	return n
 }
 
 func touch(obj *waitobject.Object, n notify) {
@@ -103,20 +110,12 @@ READ:
 	switch x := v.(notify); {
 	case x.flag&notifyReady > 0:
 		// data is ready, read them
-		c.read.SetValue(func(v interface{}) interface{} {
-			x.flag ^= notifyReady
-			return x
-		})
+		c.read.SetValue(clearNotifyReadyFlag)
 		goto READ
 	case x.flag&notifyClose > 0:
 		return 0, io.EOF
-	case x.flag&notifyCancel > 0:
-		return 0, &timeoutError{}
 	case x.flag&notifyError > 0:
 		return 0, x.err
-	case x.flag&notifyAck > 0:
-		// Continux waiting
-		goto READ
 	default:
 		panic(byte(x.flag))
 	}
@@ -144,7 +143,7 @@ func (c *Stream) Write(buf []byte) (n int, err error) {
 
 	defer func() {
 		if r := recover(); r != nil {
-			if fmt.Sprintf("%v", r) == "send on closed channel" {
+			if msg, _ := r.(string); strings.Contains(msg, "send on closed channel") {
 				n, err = 0, io.EOF
 			} else {
 				panic(r)
@@ -158,13 +157,7 @@ func (c *Stream) Write(buf []byte) (n int, err error) {
 	}
 
 	debugprint(c, " waits writing")
-	v, ontime := c.write.Wait(func(v interface{}) waitobject.WaitReturn {
-		if n, _ := v.(notify); n.flag <= notifyClose && n.flag > 0 {
-			// Close or Error
-			return waitobject.DoNotWait
-		}
-		return waitobject.Wait
-	})
+	v, ontime := c.write.Wait()
 	if !ontime {
 		// a timeout signal may be triggerred by:
 		//  1. a real timedout event
@@ -177,17 +170,11 @@ func (c *Stream) Write(buf []byte) (n int, err error) {
 	case x.flag&notifyReady > 0:
 		// data is sent already
 		debugprint(c, " waits writing finished: ", string(buf))
-		c.write.SetValue(func(v interface{}) interface{} {
-			n := v.(notify)
-			n.flag &= ^notifyReady
-			return n
-		})
+		c.write.SetValue(clearNotifyReadyFlag)
 		n = len(buf)
 		return
 	case x.flag&notifyClose > 0:
 		return 0, io.EOF
-	case x.flag&notifyCancel > 0:
-		return 0, &timeoutError{}
 	case x.flag&notifyError > 0:
 		return 0, x.err
 	default:
@@ -196,7 +183,7 @@ func (c *Stream) Write(buf []byte) (n int, err error) {
 }
 
 func (c *Stream) String() string {
-	return fmt.Sprintf("<stream%d_%s>", c.streamIdx, string(c.tag))
+	return fmt.Sprintf("<stream_%d_%s>", c.streamIdx, string(c.tag))
 }
 
 func (c *Stream) closeNoInfo() {

@@ -69,7 +69,7 @@ func (cs *connState) start() {
 }
 
 func (cs *connState) String() string {
-	return fmt.Sprintf("<connState%d_%s>", cs.idx, string(cs.tag))
+	return fmt.Sprintf("<connState_%d_%s>", cs.idx, string(cs.tag))
 }
 
 func (cs *connState) readLoop() {
