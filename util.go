@@ -118,7 +118,7 @@ type Map32 struct {
 }
 
 // New creates a new Map32
-func (Map32) New() Map32 {
+func NewMap32() Map32 {
 	return Map32{RWMutex: new(sync.RWMutex), m: make(map[uint32]unsafe.Pointer)}
 }
 
@@ -205,12 +205,6 @@ func (sm *Map32) IterateConst(callback func(id uint32, s unsafe.Pointer) bool) {
 		}
 	}
 	sm.RUnlock()
-}
-
-func stacktrace() string {
-	x := make([]byte, 4096)
-	n := runtime.Stack(x, false)
-	return string(x[:n])
 }
 
 // WSWrite and WSRead are simple implementations of RFC6455

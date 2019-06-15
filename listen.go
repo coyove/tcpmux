@@ -45,12 +45,11 @@ func Listen(addr string, pooling bool) (net.Listener, error) {
 func Wrap(ln net.Listener) net.Listener {
 	lp := &ListenPool{
 		ln:        ln,
+		conns:     NewMap32(),
+		streams:   NewMap32(),
 		exit:      make(chan bool, 1),
 		exitA:     make(chan bool, 1),
 		acceptErr: make(chan error, 1),
-		conns:     Map32{}.New(),
-		streams:   Map32{}.New(),
-		realConns: Map32{}.New(),
 
 		newStreamWaiting: make(chan uint64, acceptStreamChanSize),
 	}
@@ -67,11 +66,10 @@ func (l *ListenPool) Upgrade(conn net.Conn) {
 		ErrorCallback: l.ErrorCallback,
 		idx:           counter,
 		conn:          conn,
+		streams:       NewMap32(),
 		master:        l.conns,
-		exitWrite:     make(chan bool),
 		writeQueue:    make(chan writePending, 1024),
 		timeout:       streamTimeout,
-		streams:       Map32{}.New(),
 		key:           l.Key,
 		tag:           's',
 		newStreamCallback: func(idx uint32) {

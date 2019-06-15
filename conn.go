@@ -17,48 +17,40 @@ type writePending struct {
 }
 
 type connState struct {
-	conn     net.Conn
-	master   Map32
-	streams  Map32
-	idx      uint32
-	timeout  uint32
-	exitRead chan bool
-	key      []byte
+	conn    net.Conn
+	master  Map32
+	streams Map32
+	idx     uint32
+	timeout uint32
+	key     []byte
 
 	newStreamCallback func(steamIdx uint32)
 	Sum32             func([]byte, []byte) uint32
 	ErrorCallback     func(error) bool
 
-	stopped bool
+	stopper sync.Once
 	tag     byte
-	sync.Mutex
 
 	writeQueue chan writePending
-	exitWrite  chan bool
 }
 
 // When something serious happened, we broadcast it to every stream and close the master conn
 // TCP connections may have temporary errors, but here we treat them as the same as other failures
 func (cs *connState) broadcastErrAndStop(err error) {
-	cs.Lock()
-	if cs.stopped {
-		cs.Unlock()
-		return
-	}
+	cs.stopper.Do(func() {
+		// After conn closed, readLoop and writeLoop will encounter errors, and exit
+		cs.conn.Close()
+		close(cs.writeQueue)
+		cs.master.Delete(cs.idx)
 
-	cs.conn.Close()
-	close(cs.writeQueue)
-	cs.master.Delete(cs.idx)
-	cs.stopped = true
-	cs.Unlock()
-
-	n := notify{flag: notifyError, err: err}
-	cs.streams.Iterate(func(idx uint32, s unsafe.Pointer) bool {
-		c := (*Stream)(s)
-		touch(c.read, n)
-		touch(c.write, n)
-		c.closeNoInfo()
-		return true
+		n := notify{flag: notifyError, err: err}
+		cs.streams.Iterate(func(idx uint32, s unsafe.Pointer) bool {
+			c := (*Stream)(s)
+			touch(c.read, n)
+			touch(c.write, n)
+			c.closeNoInfo()
+			return true
+		})
 	})
 }
 
@@ -84,7 +76,7 @@ func (cs *connState) readLoop() {
 		streamIdx := binary.BigEndian.Uint32(payload[4:])
 
 		if hash != cs.Sum32(payload[4:], cs.key) {
-			// If we found a invalid hash, the whole connection wll not be stable anymore
+			// If we found an invalid hash, the whole connection will not be stable anymore
 			cs.broadcastErrAndStop(ErrInvalidHash)
 			return
 		}
@@ -142,6 +134,8 @@ func (cs *connState) readLoop() {
 	}
 }
 
+// writeLoop only write raw bytes to TCP conns, that means
+// the incoming payloads in writeQueue are "frames" already
 func (cs *connState) writeLoop() {
 	for {
 		select {

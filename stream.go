@@ -143,7 +143,7 @@ func (c *Stream) Write(buf []byte) (n int, err error) {
 
 	defer func() {
 		if r := recover(); r != nil {
-			if msg, _ := r.(string); strings.Contains(msg, "send on closed channel") {
+			if strings.Contains(fmt.Sprint(r), "send on closed channel") {
 				n, err = 0, io.EOF
 			} else {
 				panic(r)

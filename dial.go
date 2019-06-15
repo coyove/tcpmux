@@ -33,7 +33,7 @@ func NewDialer(addr string, poolSize int) *DialPool {
 	dp := &DialPool{
 		address:  addr,
 		maxConns: uint32(poolSize),
-		conns:    Map32{}.New(),
+		conns:    NewMap32(),
 		r:        rand.New(),
 	}
 
@@ -99,15 +99,13 @@ func (d *DialPool) DialTimeout(timeout time.Duration) (net.Conn, error) {
 	d.conns.Lock()
 	if len(d.conns.m) < int(d.maxConns) {
 		c := &connState{
-			idx:           atomic.AddUint32(&d.connsCtr, 1),
-			exitWrite:     make(chan bool),
-			writeQueue:    make(chan writePending, 1024),
-			streams:       Map32{}.New(),
-			master:        d.conns,
-			timeout:       MasterTimeout,
-			key:           d.Key,
-			tag:           'c',
-			ErrorCallback: d.OnError,
+			idx:        atomic.AddUint32(&d.connsCtr, 1),
+			writeQueue: make(chan writePending, 1024),
+			master:     d.conns,
+			streams:    NewMap32(),
+			timeout:    MasterTimeout,
+			key:        d.Key,
+			tag:        'c',
 		}
 
 		if d.Key != nil {
