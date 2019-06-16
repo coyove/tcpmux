@@ -102,11 +102,7 @@ func (cs *connState) readLoop() {
 			case cmdRemoteClosed:
 				if p, ok := cs.streams.Fetch(streamIdx); ok {
 					s := (*Stream)(p)
-					// log.Println("receive remote close", string(s.tag), s.streamIdx)
-					// Inform the stream that its remote has closed itself
-					n := notify{flag: notifyClose}
-					touch(s.read, n)
-					touch(s.write, n)
+					s.Close()
 				}
 				debugprint(cs, ", stream: ", streamIdx, ", remote stream has been closed")
 			default:
