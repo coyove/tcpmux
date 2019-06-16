@@ -5,9 +5,9 @@ import (
 	"crypto/cipher"
 	"fmt"
 	"io"
+	"math/rand"
 	"net"
 	"net/http"
-	"strconv"
 	"sync"
 	"time"
 
@@ -107,8 +107,18 @@ func NewServerConn(idx uint32, ln *Listener) *ServerConn {
 }
 
 func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
-	_connIdx, _ := strconv.ParseUint(r.FormValue("s"), 10, 64)
-	connIdx := uint32(_connIdx)
+	connIdx, ok := stringToConnIdx(l.blk, r.FormValue("s"))
+	if !ok {
+		p := [256]byte{}
+		for {
+			if rand.Intn(8) == 0 {
+				break
+			}
+			rand.Read(p[:])
+			w.Write(p[:rand.Intn(128)+128])
+		}
+		return
+	}
 
 	var conn *ServerConn
 	l.connsmu.Lock()
@@ -122,12 +132,15 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 	l.connsmu.Unlock()
 
 	if datalen, err := conn.read.feedFrames(r.Body); err != nil {
-		debugprint("listener feed frames error: ", err, ", ", conn, " will be deleted")
+		debugprint("listener feed frames, error: ", err, ", ", conn, " will be deleted")
 		conn.Close()
 		return
-	} else if datalen == 0 {
+	} else if datalen == 0 && len(conn.write.buf) == 0 {
 		// Client sent nothing, we treat the request as a ping
-		// However too many pings without any valid data are meaningless
+		// However too many pings without:
+		//   1) sending any valid data to us
+		//   2) we sending any valid data to them
+		// are meaningless
 		// So we won't reschedule its deadline: it will die as expected
 	} else {
 		conn.schedPurge.Reschedule(func() { conn.Close() }, time.Now().Add(l.InactivePurge))

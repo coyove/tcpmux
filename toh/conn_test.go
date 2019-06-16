@@ -5,17 +5,17 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"runtime/pprof"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
-
-	"gitlab.com/ra_raven/go-common/rand"
 )
 
 var debugFlag = flag.Bool("debug", false, "")
@@ -97,7 +97,7 @@ func TestHTTPServer(t *testing.T) {
 	}
 
 	test := func(wg *sync.WaitGroup) {
-		str := rand.FetchString(32)
+		str := strconv.FormatUint(rand.Uint64(), 10)
 		resp, err := client.Get("http://127.0.0.1:13739/" + str)
 
 		if err != nil {
