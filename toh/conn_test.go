@@ -51,7 +51,7 @@ func TestHTTPServer(t *testing.T) {
 
 	go func() {
 		ln, _ = Listen("tcp", "127.0.0.1:13739")
-		//		ln.(*Listener).InactiveTimeout = 0
+		ln.(*Listener).InactiveTimeout = 10
 
 		ready <- true
 		mux := http.NewServeMux()
@@ -97,7 +97,7 @@ func TestHTTPServer(t *testing.T) {
 			time.Sleep(2 * time.Second)
 			f, _ := os.Create("heap.txt")
 			pprof.Lookup("goroutine").WriteTo(f, 1)
-			fmt.Println("profile")
+			//fmt.Println("profile")
 		}
 	}()
 

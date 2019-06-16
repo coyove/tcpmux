@@ -8,13 +8,14 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/coyove/common/sched"
 )
 
 type ServerConn struct {
 	idx        uint64
 	counter    uint64
-	failure    error
-	lastActive time.Time
+	schedPurge sched.SchedKey
 
 	write struct {
 		mu      sync.Mutex
@@ -37,6 +38,9 @@ type Listener struct {
 }
 
 func (l *Listener) Close() error {
+	select {
+	case l.httpServeErr <- fmt.Errorf("accept on closed listener"):
+	}
 	l.closed = true
 	return l.ln.Close()
 }
@@ -76,18 +80,13 @@ func Listen(network string, address string) (net.Listener, error) {
 	}()
 
 	go func() {
-		for t := range time.Tick(time.Second) {
-			count, gced := 0, 0
+		for range time.Tick(time.Second) {
+			count := 0
 			l.conns.Range(func(k, v interface{}) bool {
-				conn := v.(*ServerConn)
-				if l.InactiveTimeout > 0 && int64(t.Sub(conn.lastActive).Seconds()) > l.InactiveTimeout {
-					l.conns.Delete(k)
-					gced++
-				}
 				count++
 				return true
 			})
-			vprint("listener: active connections: ", count, ", deleted: ", gced)
+			vprint("listener active connections: ", count)
 		}
 	}()
 
@@ -120,11 +119,13 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 		l.conns.Delete(conn.idx)
 		return
 	} else if datalen == 0 {
-		// Client sent nothing, we receive the request as a ping
+		// Client sent nothing, we treat the request as a ping
 		// However too many pings without any valid data are meaningless
-		// So we won;t update conn's lastActive
+		// So we won't reschedule its deadline: it will die as expected
 	} else {
-		conn.lastActive = time.Now()
+		conn.schedPurge.Reschedule(func() {
+			l.conns.Delete(conn.idx)
+		}, time.Now().Add(time.Duration(l.InactiveTimeout)*time.Second))
 	}
 
 	conn.write.mu.Lock()
@@ -137,8 +138,9 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, err := io.Copy(w, f.Marshal()); err != nil {
-		conn.failure = err
-		fmt.Println(err)
+		vprint("failed to response to client, error: ", err)
+		conn.read.feedError(err)
+		conn.Close()
 		l.conns.Delete(conn.idx)
 	} else {
 		conn.write.buf = conn.write.buf[:0]
@@ -152,16 +154,24 @@ func (c *ServerConn) SetReadDeadline(t time.Time) error {
 }
 
 func (c *ServerConn) SetDeadline(t time.Time) error {
-	c.SetWriteDeadline(t)
 	c.SetReadDeadline(t)
 	return nil
 }
 
 func (c *ServerConn) SetWriteDeadline(t time.Time) error {
+	// SeverConn can't support write deadline
 	return nil
 }
 
 func (c *ServerConn) Write(p []byte) (n int, err error) {
+	if c.read.closed {
+		return 0, ErrClosedConn
+	}
+
+	if c.read.err != nil {
+		return 0, c.read.err
+	}
+
 	c.write.mu.Lock()
 	defer c.write.mu.Unlock()
 	c.write.buf = append(c.write.buf, p...)
@@ -173,6 +183,7 @@ func (c *ServerConn) Read(p []byte) (n int, err error) {
 }
 
 func (c *ServerConn) Close() error {
+	c.schedPurge.Cancel()
 	c.read.close()
 	return nil
 }

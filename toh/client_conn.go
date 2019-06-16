@@ -16,7 +16,6 @@ type ClientConn struct {
 	idx      uint64
 	tr       http.RoundTripper
 	endpoint string
-	failure  error
 
 	write struct {
 		counter uint64
@@ -70,8 +69,8 @@ func (c *ClientConn) Close() error {
 }
 
 func (c *ClientConn) Write(p []byte) (n int, err error) {
-	if c.failure != nil {
-		return 0, c.failure
+	if c.read.err != nil {
+		return 0, c.read.err
 	}
 
 	if c.read.closed {
@@ -89,8 +88,8 @@ func (c *ClientConn) Write(p []byte) (n int, err error) {
 	}
 
 	c.sendWriteBuf()
-	if c.failure != nil {
-		return 0, c.failure
+	if c.read.err != nil {
+		return 0, c.read.err
 	}
 	return len(p), nil
 }
@@ -102,14 +101,9 @@ func (c *ClientConn) schedSending() {
 
 func (c *ClientConn) sendWriteBuf() {
 	c.write.mu.Lock()
-	defer func() {
-		if c.failure != nil {
-			c.read.feedError(c.failure)
-		}
-		c.write.mu.Unlock()
-	}()
+	defer c.write.mu.Unlock()
 
-	if c.failure != nil {
+	if c.read.err != nil {
 		return
 	}
 
@@ -126,13 +120,13 @@ func (c *ClientConn) sendWriteBuf() {
 
 	resp, err := client.Post(c.endpoint+"?s="+strconv.FormatUint(c.idx, 10), "application/octet-stream", f.Marshal())
 	if err != nil {
-		c.failure = err
+		c.read.feedError(err)
 		return
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
-		c.failure = fmt.Errorf("remote is unavailable: %s", resp.Status)
+		c.read.feedError(fmt.Errorf("remote is unavailable: %s", resp.Status))
 		return
 	}
 

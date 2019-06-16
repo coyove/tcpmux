@@ -78,6 +78,7 @@ func (c *readConn) feedFrames(r io.Reader) (datalen int, err error) {
 func (c *readConn) feedError(err error) {
 	c.err = err
 	c.ready.Touch(dummyTouch)
+	// readLoop will still continue
 }
 
 func (c *readConn) close() {
@@ -121,11 +122,14 @@ func (c *readConn) readLoopRearrange() {
 					delete(c.missingFrames, f.Idx)
 				} else {
 					c.missingFrames[c.counter+1]++
-					if c.missingFrames[c.counter+1] > 16 {
+
+					if x := c.missingFrames[c.counter+1]; x > 16 {
 						c.mu.Unlock()
 						c.feedError(fmt.Errorf("fatal: missing certain frame"))
-						fmt.Println(c.missingFrames, c.futureFrames)
+						vprint("missings: ", c.missingFrames, ", futures: ", c.futureFrames)
 						return
+					} else if x > 2 {
+						vprint("temp missing: ", c.counter+1, ", tries: ", x)
 					}
 					break
 				}
