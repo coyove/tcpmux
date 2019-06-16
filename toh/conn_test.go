@@ -45,13 +45,38 @@ func TestClientConn(t *testing.T) {
 	select {}
 }
 
+func TestReadDeadline(t *testing.T) {
+	go func() {
+		ln, _ := Listen("tcp", "127.0.0.1:13739")
+		conn, _ := ln.Accept()
+		time.Sleep(time.Second * 2)
+		conn.Write([]byte{1})
+	}()
+
+	conn, _ := Dial("tcp", "127.0.0.1:13739")
+	p := [1]byte{}
+	conn.SetReadDeadline(time.Now().Add(time.Second))
+	_, err := conn.Read(p[:])
+	fmt.Println(p, err)
+
+	time.Sleep(time.Second * 2)
+	_, err = conn.Read(p[:])
+	fmt.Println(p, err)
+
+	conn.SetReadDeadline(time.Time{})
+	conn.Read(p[:])
+	fmt.Println(p)
+
+	select {}
+}
+
 func TestHTTPServer(t *testing.T) {
 	ready := make(chan bool)
 	var ln net.Listener
 
 	go func() {
 		ln, _ = Listen("tcp", "127.0.0.1:13739")
-		ln.(*Listener).InactiveTimeout = 10
+		ln.(*Listener).InactivePurge = 10 * time.Second
 
 		ready <- true
 		mux := http.NewServeMux()

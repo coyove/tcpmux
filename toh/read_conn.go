@@ -154,6 +154,10 @@ READ:
 		return 0, c.err
 	}
 
+	if c.ready.IsTimedout() {
+		return 0, fmt.Errorf("timeout")
+	}
+
 	c.mu.Lock()
 	if len(c.buf) > 0 {
 		n = copy(p, c.buf)

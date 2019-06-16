@@ -14,6 +14,7 @@ import (
 
 type ServerConn struct {
 	idx        uint32
+	rev        *Listener
 	counter    uint64
 	schedPurge sched.SchedKey
 
@@ -29,12 +30,12 @@ type ServerConn struct {
 type Listener struct {
 	ln           net.Listener
 	closed       bool
-	conns        sync.Map
+	conns        map[uint32]*ServerConn
 	connsmu      sync.Mutex
 	httpServeErr chan error
 	pendingConns chan *ServerConn
 
-	InactiveTimeout int64
+	InactivePurge time.Duration
 }
 
 func (l *Listener) Close() error {
@@ -67,10 +68,11 @@ func Listen(network string, address string) (net.Listener, error) {
 	}
 
 	l := &Listener{
-		ln:              ln,
-		httpServeErr:    make(chan error, 1),
-		pendingConns:    make(chan *ServerConn, 1024),
-		InactiveTimeout: 60,
+		ln:            ln,
+		httpServeErr:  make(chan error, 1),
+		pendingConns:  make(chan *ServerConn, 1024),
+		conns:         map[uint32]*ServerConn{},
+		InactivePurge: 60 * time.Second,
 	}
 
 	go func() {
@@ -79,22 +81,20 @@ func Listen(network string, address string) (net.Listener, error) {
 		l.httpServeErr <- http.Serve(ln, mux)
 	}()
 
-	go func() {
-		for range time.Tick(time.Second) {
-			count := 0
-			l.conns.Range(func(k, v interface{}) bool {
-				count++
-				return true
-			})
-			vprint("listener active connections: ", count)
-		}
-	}()
+	if Verbose {
+		go func() {
+			for range time.Tick(time.Second) {
+				vprint("listener active connections: ", len(l.conns), ", global counter: ", globalConnCounter)
+			}
+		}()
+	}
 
 	return l, nil
 }
 
-func NewServerConn(idx uint32) *ServerConn {
+func NewServerConn(idx uint32, ln *Listener) *ServerConn {
 	c := &ServerConn{idx: idx}
+	c.rev = ln
 	c.read = newReadConn(c.idx, 's')
 	return c
 }
@@ -105,11 +105,11 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 
 	var conn *ServerConn
 	l.connsmu.Lock()
-	if sc, _ := l.conns.Load(connIdx); sc != nil {
-		conn = sc.(*ServerConn)
+	if sc, _ := l.conns[connIdx]; sc != nil {
+		conn = sc
 	} else {
-		conn = NewServerConn(connIdx)
-		l.conns.Store(connIdx, conn)
+		conn = NewServerConn(connIdx, l)
+		l.conns[connIdx] = conn
 		l.pendingConns <- conn
 	}
 	l.connsmu.Unlock()
@@ -117,20 +117,16 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 	if datalen, err := conn.read.feedFrames(r.Body); err != nil {
 		debugprint("listener feed frames error: ", err, ", ", conn, " will be deleted")
 		conn.Close()
-		l.conns.Delete(conn.idx)
 		return
 	} else if datalen == 0 {
 		// Client sent nothing, we treat the request as a ping
 		// However too many pings without any valid data are meaningless
 		// So we won't reschedule its deadline: it will die as expected
 	} else {
-		conn.schedPurge.Reschedule(func() {
-			l.conns.Delete(conn.idx)
-		}, time.Now().Add(time.Duration(l.InactiveTimeout)*time.Second))
+		conn.schedPurge.Reschedule(func() { conn.Close() }, time.Now().Add(l.InactivePurge))
 	}
 
 	conn.write.mu.Lock()
-	defer conn.write.mu.Unlock()
 
 	f := Frame{
 		Idx:     conn.write.counter + 1,
@@ -142,11 +138,12 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 		vprint("failed to response to client, error: ", err)
 		conn.read.feedError(err)
 		conn.Close()
-		l.conns.Delete(conn.idx)
 	} else {
 		conn.write.buf = conn.write.buf[:0]
 		conn.write.counter++
 	}
+
+	conn.write.mu.Unlock()
 }
 
 func (c *ServerConn) SetReadDeadline(t time.Time) error {
@@ -174,8 +171,8 @@ func (c *ServerConn) Write(p []byte) (n int, err error) {
 	}
 
 	c.write.mu.Lock()
-	defer c.write.mu.Unlock()
 	c.write.buf = append(c.write.buf, p...)
+	c.write.mu.Unlock()
 	return len(p), nil
 }
 
@@ -186,6 +183,10 @@ func (c *ServerConn) Read(p []byte) (n int, err error) {
 func (c *ServerConn) Close() error {
 	c.schedPurge.Cancel()
 	c.read.close()
+	c.rev.connsmu.Lock()
+	delete(c.rev.conns, c.idx)
+	c.rev.connsmu.Unlock()
+	//vprint(c, " delete", c.rev.conns)
 	return nil
 }
 
@@ -194,5 +195,5 @@ func (c *ServerConn) RemoteAddr() net.Addr {
 }
 
 func (c *ServerConn) LocalAddr() net.Addr {
-	return &net.TCPAddr{}
+	return c.rev.Addr()
 }

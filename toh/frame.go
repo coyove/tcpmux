@@ -7,8 +7,7 @@ import (
 )
 
 const (
-	OptHello = 1 << iota
-	OptAck
+	OptResend = 1 << iota
 )
 
 type Frame struct {

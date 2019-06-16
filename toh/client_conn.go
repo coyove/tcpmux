@@ -39,6 +39,7 @@ func NewClientConn(endpoint string) *ClientConn {
 	c.idx = atomic.AddUint32(&globalConnCounter, 1)
 	c.tr = http.DefaultTransport
 	c.read = newReadConn(c.idx, 'c')
+	c.write.sched = sched.Schedule(c.schedSending, time.Now().Add(time.Second))
 	return c
 }
 
@@ -85,14 +86,11 @@ func (c *ClientConn) Write(p []byte) (n int, err error) {
 	c.write.buf = append(c.write.buf, p...)
 	c.write.mu.Unlock()
 
-	if len(c.write.buf) < 1024 {
+	if len(c.write.buf) < 128 {
 		return len(p), nil
 	}
 
 	c.sendWriteBuf()
-	if c.read.err != nil {
-		return 0, c.read.err
-	}
 	return len(p), nil
 }
 
