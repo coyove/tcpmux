@@ -1,6 +1,7 @@
 package toh
 
 import (
+	"crypto/cipher"
 	"fmt"
 	"io"
 	"strings"
@@ -24,18 +25,20 @@ type readConn struct {
 	missingFrames map[uint64]uint64
 	ready         *waitobject.Object
 	err           error
+	blk           cipher.Block
 	closed        bool
 	tag           byte
 	idx           uint32
 }
 
-func newReadConn(idx uint32, tag byte) *readConn {
+func newReadConn(idx uint32, blk cipher.Block, tag byte) *readConn {
 	r := &readConn{
 		frames:        make(chan Frame, 1024),
 		futureFrames:  map[uint64]Frame{},
 		missingFrames: map[uint64]uint64{},
 		idx:           idx,
 		tag:           tag,
+		blk:           blk,
 	}
 	r.ready = waitobject.New()
 	go r.readLoopRearrange()
@@ -57,7 +60,7 @@ func (c *readConn) feedFrames(r io.Reader) (datalen int, err error) {
 
 	count := 0
 	for {
-		f, ok := ParseFrame(r)
+		f, ok := ParseFrame(r, c.blk)
 		if !ok {
 			return 0, fmt.Errorf("invalid frames")
 		}

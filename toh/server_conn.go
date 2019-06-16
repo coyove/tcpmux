@@ -1,6 +1,8 @@
 package toh
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
 	"fmt"
 	"io"
 	"net"
@@ -17,6 +19,7 @@ type ServerConn struct {
 	rev        *Listener
 	counter    uint64
 	schedPurge sched.SchedKey
+	blk        cipher.Block
 
 	write struct {
 		mu      sync.Mutex
@@ -34,6 +37,7 @@ type Listener struct {
 	connsmu      sync.Mutex
 	httpServeErr chan error
 	pendingConns chan *ServerConn
+	blk          cipher.Block
 
 	InactivePurge time.Duration
 }
@@ -75,6 +79,8 @@ func Listen(network string, address string) (net.Listener, error) {
 		InactivePurge: 60 * time.Second,
 	}
 
+	l.blk, _ = aes.NewCipher([]byte(network + "0123456789abcdef")[:16])
+
 	go func() {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/", l.handler)
@@ -95,7 +101,8 @@ func Listen(network string, address string) (net.Listener, error) {
 func NewServerConn(idx uint32, ln *Listener) *ServerConn {
 	c := &ServerConn{idx: idx}
 	c.rev = ln
-	c.read = newReadConn(c.idx, 's')
+	c.blk = ln.blk
+	c.read = newReadConn(c.idx, c.blk, 's')
 	return c
 }
 
@@ -134,7 +141,7 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 		Data:    conn.write.buf,
 	}
 
-	if _, err := io.Copy(w, f.Marshal()); err != nil {
+	if _, err := io.Copy(w, f.Marshal(conn.blk)); err != nil {
 		vprint("failed to response to client, error: ", err)
 		conn.read.feedError(err)
 		conn.Close()

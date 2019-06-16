@@ -1,6 +1,8 @@
 package toh
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
 	"fmt"
 	"net"
 	"net/http"
@@ -16,6 +18,7 @@ type ClientConn struct {
 	idx      uint32
 	tr       http.RoundTripper
 	endpoint string
+	blk      cipher.Block
 
 	write struct {
 		counter uint64
@@ -29,6 +32,8 @@ type ClientConn struct {
 
 func Dial(network string, address string) (net.Conn, error) {
 	c := NewClientConn("http://" + address)
+	c.blk, _ = aes.NewCipher([]byte(network + "0123456789abcdef")[:16])
+	c.read = newReadConn(c.idx, c.blk, 'c')
 	return c, nil
 }
 
@@ -38,7 +43,6 @@ func NewClientConn(endpoint string) *ClientConn {
 	c := &ClientConn{endpoint: endpoint}
 	c.idx = atomic.AddUint32(&globalConnCounter, 1)
 	c.tr = http.DefaultTransport
-	c.read = newReadConn(c.idx, 'c')
 	c.write.sched = sched.Schedule(c.schedSending, time.Now().Add(time.Second))
 	return c
 }
@@ -118,7 +122,7 @@ func (c *ClientConn) sendWriteBuf() {
 		Data:    c.write.buf,
 	}
 
-	resp, err := client.Post(c.endpoint+"?s="+strconv.Itoa(int(c.idx)), "application/octet-stream", f.Marshal())
+	resp, err := client.Post(c.endpoint+"?s="+strconv.Itoa(int(c.idx)), "application/octet-stream", f.Marshal(c.blk))
 	if err != nil {
 		c.read.feedError(err)
 		return
