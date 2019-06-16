@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -93,7 +92,7 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 	defer conn.write.mu.Unlock()
 
 	f := Frame{
-		Idx:       atomic.AddUint64(&conn.write.counter, 1),
+		Idx:       incrWriteFrameCounter(&conn.write.counter),
 		StreamIdx: conn.idx,
 		Data:      conn.write.buf,
 	}
@@ -136,9 +135,9 @@ func (c *ServerConn) Close() error {
 }
 
 func (c *ServerConn) RemoteAddr() net.Addr {
-	return nil
+	return &net.TCPAddr{}
 }
 
 func (c *ServerConn) LocalAddr() net.Addr {
-	return nil
+	return &net.TCPAddr{}
 }

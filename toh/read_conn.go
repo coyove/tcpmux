@@ -37,15 +37,22 @@ func newReadConn(idx uint64) *readConn {
 	return r
 }
 
-func (c *readConn) feedFrames(r io.Reader) {
+func (c *readConn) feedFrames(r io.Reader) (int, error) {
+	count := 0
 	for {
 		f, ok := ParseFrame(r)
 		if !ok {
+			return 0, fmt.Errorf("invalid frames")
+		}
+		if f.Idx == 0 {
 			break
 		}
+
 		debugprint("feed: ", f.Data)
 		c.frames <- f
+		count++
 	}
+	return count, nil
 }
 
 func (c *readConn) feedError(err error) {
@@ -96,18 +103,15 @@ func (c *readConn) readLoopRearrange() {
 
 func (c *readConn) Read(p []byte) (n int, err error) {
 READ:
-	c.mu.Lock()
-
 	if c.closed {
-		c.mu.Unlock()
 		return 0, ErrClosedConn
 	}
 
 	if c.err != nil {
-		c.mu.Unlock()
 		return 0, c.err
 	}
 
+	c.mu.Lock()
 	if len(c.buf) > 0 {
 		n = copy(p, c.buf)
 		c.buf = c.buf[n:]
@@ -127,9 +131,9 @@ READ:
 		return 0, fmt.Errorf("timeout")
 	}
 
-	if c.err != nil {
-		return 0, c.err
-	}
-
 	goto READ
+}
+
+func (c *readConn) String() string {
+	return fmt.Sprintf("<readConn_%d_ctr_%d>", c.idx, c.counter)
 }

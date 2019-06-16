@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"runtime"
+	"sync/atomic"
 )
 
 var debug = false
@@ -30,4 +31,12 @@ func debugprint(v ...interface{}) {
 		src.Truncate(src.Len() - 1)
 	}
 	fmt.Println(src.String(), "]\n\t", fmt.Sprint(v...))
+}
+
+func incrWriteFrameCounter(counter *uint64) uint64 {
+	x := atomic.AddUint64(counter, 1)
+	if x == 0 {
+		x = atomic.AddUint64(counter, 1)
+	}
+	return x
 }

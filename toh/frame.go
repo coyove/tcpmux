@@ -30,6 +30,9 @@ func (f Frame) Marshal() io.Reader {
 func ParseFrame(r io.Reader) (f Frame, ok bool) {
 	header := [24]byte{}
 	if n, err := io.ReadAtLeast(r, header[:], len(header)); err != nil || n != len(header) {
+		if err == io.EOF {
+			ok = true
+		}
 		return
 	}
 
