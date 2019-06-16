@@ -3,6 +3,7 @@ package toh
 import (
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,29 +16,45 @@ var (
 )
 
 type readConn struct {
-	idx          uint64
-	counter      uint64
-	mu           sync.Mutex
-	buf          []byte
-	frames       chan Frame
-	futureFrames map[uint64]Frame
-	ready        *waitobject.Object
-	err          error
-	closed       bool
+	idx           uint64
+	counter       uint64
+	mu            sync.Mutex
+	buf           []byte
+	frames        chan Frame
+	futureFrames  map[uint64]Frame
+	missingFrames map[uint64]uint64
+	ready         *waitobject.Object
+	err           error
+	closed        bool
+	tag           byte
 }
 
-func newReadConn(idx uint64) *readConn {
+func newReadConn(idx uint64, tag byte) *readConn {
 	r := &readConn{
-		frames:       make(chan Frame, 1024),
-		futureFrames: map[uint64]Frame{},
-		idx:          idx,
+		frames:        make(chan Frame, 1024),
+		futureFrames:  map[uint64]Frame{},
+		missingFrames: map[uint64]uint64{},
+		idx:           idx,
+		tag:           tag,
 	}
 	r.ready = waitobject.New()
 	go r.readLoopRearrange()
 	return r
 }
 
-func (c *readConn) feedFrames(r io.Reader) (int, error) {
+func (c *readConn) feedFrames(r io.Reader) (datalen int, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			// Dirty way to avoid closed channel panic
+			if strings.Contains(fmt.Sprintf("%v", r), "send on close") {
+				datalen = 0
+				err = ErrClosedConn
+			} else {
+				panic(r)
+			}
+		}
+	}()
+
 	count := 0
 	for {
 		f, ok := ParseFrame(r)
@@ -47,10 +64,13 @@ func (c *readConn) feedFrames(r io.Reader) (int, error) {
 		if f.Idx == 0 {
 			break
 		}
+		if c.closed {
+			return 0, ErrClosedConn
+		}
 
-		debugprint("feed: ", f.Data)
+		debugprint("feed: ", string(f.Data))
 		c.frames <- f
-		count++
+		count += len(f.Data)
 	}
 	return count, nil
 }
@@ -85,13 +105,28 @@ func (c *readConn) readLoopRearrange() {
 				c.feedError(fmt.Errorf("fatal: unmatched stream index"))
 				return
 			}
+
+			if f.Idx <= c.counter {
+				c.mu.Unlock()
+				c.feedError(fmt.Errorf("unmatched counter, maybe server GCed the connection"))
+				return
+			}
+
 			c.futureFrames[f.Idx] = f
 			for {
 				if f := c.futureFrames[c.counter+1]; f.StreamIdx == c.idx {
 					c.buf = append(c.buf, f.Data...)
 					c.counter = f.Idx
-					delete(c.futureFrames, f.Idx)
+					// delete(c.futureFrames, f.Idx)
+					delete(c.missingFrames, f.Idx)
 				} else {
+					c.missingFrames[c.counter+1]++
+					if c.missingFrames[c.counter+1] > 16 {
+						c.mu.Unlock()
+						c.feedError(fmt.Errorf("fatal: missing certain frame"))
+						fmt.Println(c.missingFrames, c.futureFrames)
+						return
+					}
 					break
 				}
 			}
@@ -135,5 +170,5 @@ READ:
 }
 
 func (c *readConn) String() string {
-	return fmt.Sprintf("<readConn_%d_ctr_%d>", c.idx, c.counter)
+	return fmt.Sprintf("<readConn_%d_%s_ctr_%d>", c.idx, string(c.tag), c.counter)
 }

@@ -1,6 +1,7 @@
 package toh
 
 import (
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -10,9 +11,10 @@ import (
 )
 
 type ServerConn struct {
-	idx     uint64
-	counter uint64
-	failure error
+	idx        uint64
+	counter    uint64
+	failure    error
+	lastActive time.Time
 
 	write struct {
 		mu      sync.Mutex
@@ -25,12 +27,17 @@ type ServerConn struct {
 
 type Listener struct {
 	ln           net.Listener
+	closed       bool
 	conns        sync.Map
+	connsmu      sync.Mutex
 	httpServeErr chan error
 	pendingConns chan *ServerConn
+
+	InactiveTimeout int64
 }
 
 func (l *Listener) Close() error {
+	l.closed = true
 	return l.ln.Close()
 }
 
@@ -56,9 +63,10 @@ func Listen(network string, address string) (net.Listener, error) {
 	}
 
 	l := &Listener{
-		ln:           ln,
-		httpServeErr: make(chan error, 1),
-		pendingConns: make(chan *ServerConn, 1024),
+		ln:              ln,
+		httpServeErr:    make(chan error, 1),
+		pendingConns:    make(chan *ServerConn, 1024),
+		InactiveTimeout: 60,
 	}
 
 	go func() {
@@ -67,18 +75,36 @@ func Listen(network string, address string) (net.Listener, error) {
 		l.httpServeErr <- http.Serve(ln, mux)
 	}()
 
+	go func() {
+		for t := range time.Tick(time.Second) {
+			count, gced := 0, 0
+			l.conns.Range(func(k, v interface{}) bool {
+				conn := v.(*ServerConn)
+				if l.InactiveTimeout > 0 && int64(t.Sub(conn.lastActive).Seconds()) > l.InactiveTimeout {
+					l.conns.Delete(k)
+					gced++
+				}
+				count++
+				return true
+			})
+			vprint("listener: active connections: ", count, ", deleted: ", gced)
+		}
+	}()
+
 	return l, nil
 }
 
 func NewServerConn(idx uint64) *ServerConn {
 	c := &ServerConn{idx: idx}
-	c.read = newReadConn(c.idx)
+	c.read = newReadConn(c.idx, 's')
 	return c
 }
 
 func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 	connIdx, _ := strconv.ParseUint(r.FormValue("s"), 10, 64)
+
 	var conn *ServerConn
+	l.connsmu.Lock()
 	if sc, _ := l.conns.Load(connIdx); sc != nil {
 		conn = sc.(*ServerConn)
 	} else {
@@ -86,21 +112,37 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 		l.conns.Store(connIdx, conn)
 		l.pendingConns <- conn
 	}
-	conn.read.feedFrames(r.Body)
+	l.connsmu.Unlock()
+
+	if datalen, err := conn.read.feedFrames(r.Body); err != nil {
+		debugprint("listener feed frames error: ", err, ", ", conn, " will be deleted")
+		conn.Close()
+		l.conns.Delete(conn.idx)
+		return
+	} else if datalen == 0 {
+		// Client sent nothing, we receive the request as a ping
+		// However too many pings without any valid data are meaningless
+		// So we won;t update conn's lastActive
+	} else {
+		conn.lastActive = time.Now()
+	}
 
 	conn.write.mu.Lock()
 	defer conn.write.mu.Unlock()
 
 	f := Frame{
-		Idx:       incrWriteFrameCounter(&conn.write.counter),
+		Idx:       conn.write.counter + 1,
 		StreamIdx: conn.idx,
 		Data:      conn.write.buf,
 	}
 
 	if _, err := io.Copy(w, f.Marshal()); err != nil {
 		conn.failure = err
+		fmt.Println(err)
+		l.conns.Delete(conn.idx)
 	} else {
 		conn.write.buf = conn.write.buf[:0]
+		conn.write.counter++
 	}
 }
 
@@ -131,6 +173,7 @@ func (c *ServerConn) Read(p []byte) (n int, err error) {
 }
 
 func (c *ServerConn) Close() error {
+	c.read.close()
 	return nil
 }
 

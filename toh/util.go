@@ -6,9 +6,13 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync/atomic"
+	"time"
 )
 
-var debug = false
+var (
+	debug   = false
+	Verbose = true
+)
 
 func debugprint(v ...interface{}) {
 	if !debug {
@@ -31,6 +35,14 @@ func debugprint(v ...interface{}) {
 		src.Truncate(src.Len() - 1)
 	}
 	fmt.Println(src.String(), "]\n\t", fmt.Sprint(v...))
+}
+
+func vprint(v ...interface{}) {
+	if !Verbose {
+		return
+	}
+	_, fn, line, _ := runtime.Caller(1)
+	fmt.Println(fmt.Sprintf("%s %s:%d] ", time.Now().Format("Jan _2 15:04:05.000"), filepath.Base(fn), line), fmt.Sprint(v...))
 }
 
 func incrWriteFrameCounter(counter *uint64) uint64 {

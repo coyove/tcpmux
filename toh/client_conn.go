@@ -37,7 +37,7 @@ func NewClientConn(endpoint string) *ClientConn {
 	c := &ClientConn{endpoint: endpoint}
 	c.idx = rand.Uint64()
 	c.tr = http.DefaultTransport
-	c.read = newReadConn(c.idx)
+	c.read = newReadConn(c.idx, 'c')
 	return c
 }
 
@@ -119,7 +119,7 @@ func (c *ClientConn) sendWriteBuf() {
 	}
 
 	f := Frame{
-		Idx:       incrWriteFrameCounter(&c.write.counter),
+		Idx:       c.write.counter + 1,
 		StreamIdx: c.idx,
 		Data:      c.write.buf,
 	}
@@ -137,6 +137,8 @@ func (c *ClientConn) sendWriteBuf() {
 	}
 
 	c.write.buf = c.write.buf[:0]
+	c.write.counter++
+
 	go func() {
 		c.read.feedFrames(resp.Body)
 		resp.Body.Close()

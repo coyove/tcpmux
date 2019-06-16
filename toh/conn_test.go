@@ -4,11 +4,13 @@ import (
 	"flag"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"runtime/pprof"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -24,7 +26,6 @@ func init() {
 }
 
 func TestClientConn(t *testing.T) {
-	debug = true
 	go func() {
 		ln, _ := Listen("tcp", "127.0.0.1:13739")
 		conn, _ := ln.Accept()
@@ -50,6 +51,8 @@ func TestHTTPServer(t *testing.T) {
 
 	go func() {
 		ln, _ = Listen("tcp", "127.0.0.1:13739")
+		//		ln.(*Listener).InactiveTimeout = 0
+
 		ready <- true
 		mux := http.NewServeMux()
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -64,6 +67,7 @@ func TestHTTPServer(t *testing.T) {
 			Dial: func(network, addr string) (net.Conn, error) {
 				return Dial("tcp", "127.0.0.1:13739")
 			},
+			MaxConnsPerHost: 10,
 		},
 	}
 
@@ -106,14 +110,14 @@ func TestHTTPServer(t *testing.T) {
 			break
 		}
 
-		for i := 0; i < num*10; i++ {
+		for i := 0; i < num*100; i++ {
 			wg.Add(1)
 			go test(wg)
 		}
 		wg.Wait()
 
-		if count++; count%100 == 0 {
-			//		log.Println(strings.Repeat("=", 20), count)
+		if count++; count%1 == 0 {
+			log.Println(strings.Repeat("=", 20), count)
 		}
 		//logg.D(p.Count())
 	}
