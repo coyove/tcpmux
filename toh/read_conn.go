@@ -16,7 +16,6 @@ var (
 )
 
 type readConn struct {
-	idx           uint64
 	counter       uint64
 	mu            sync.Mutex
 	buf           []byte
@@ -27,9 +26,10 @@ type readConn struct {
 	err           error
 	closed        bool
 	tag           byte
+	idx           uint32
 }
 
-func newReadConn(idx uint64, tag byte) *readConn {
+func newReadConn(idx uint32, tag byte) *readConn {
 	r := &readConn{
 		frames:        make(chan Frame, 1024),
 		futureFrames:  map[uint64]Frame{},
@@ -67,6 +67,9 @@ func (c *readConn) feedFrames(r io.Reader) (datalen int, err error) {
 		if c.closed {
 			return 0, ErrClosedConn
 		}
+		if c.err != nil {
+			return 0, c.err
+		}
 
 		debugprint("feed: ", string(f.Data))
 		c.frames <- f
@@ -101,7 +104,7 @@ func (c *readConn) readLoopRearrange() {
 			}
 
 			c.mu.Lock()
-			if f.StreamIdx != c.idx {
+			if f.ConnIdx != c.idx {
 				c.mu.Unlock()
 				c.feedError(fmt.Errorf("fatal: unmatched stream index"))
 				return
@@ -115,21 +118,22 @@ func (c *readConn) readLoopRearrange() {
 
 			c.futureFrames[f.Idx] = f
 			for {
-				if f := c.futureFrames[c.counter+1]; f.StreamIdx == c.idx {
+				idx := c.counter + 1
+				if f, ok := c.futureFrames[idx]; ok {
 					c.buf = append(c.buf, f.Data...)
 					c.counter = f.Idx
-					// delete(c.futureFrames, f.Idx)
+					delete(c.futureFrames, f.Idx)
 					delete(c.missingFrames, f.Idx)
 				} else {
-					c.missingFrames[c.counter+1]++
+					c.missingFrames[idx]++
 
-					if x := c.missingFrames[c.counter+1]; x > 16 {
+					if x := c.missingFrames[idx]; x > 16 {
 						c.mu.Unlock()
 						c.feedError(fmt.Errorf("fatal: missing certain frame"))
 						vprint("missings: ", c.missingFrames, ", futures: ", c.futureFrames)
 						return
 					} else if x > 2 {
-						vprint("temp missing: ", c.counter+1, ", tries: ", x)
+						vprint("temp missing: ", idx, ", tries: ", x)
 					}
 					break
 				}
@@ -162,7 +166,6 @@ READ:
 	_, ontime := c.ready.Wait()
 
 	if c.closed {
-		c.mu.Unlock()
 		return 0, ErrClosedConn
 	}
 

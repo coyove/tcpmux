@@ -2,18 +2,18 @@ package toh
 
 import (
 	"fmt"
-	"math/rand"
 	"net"
 	"net/http"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coyove/common/sched"
 )
 
 type ClientConn struct {
-	idx      uint64
+	idx      uint32
 	tr       http.RoundTripper
 	endpoint string
 
@@ -32,9 +32,11 @@ func Dial(network string, address string) (net.Conn, error) {
 	return c, nil
 }
 
+var globalConnCounter uint32 = 0
+
 func NewClientConn(endpoint string) *ClientConn {
 	c := &ClientConn{endpoint: endpoint}
-	c.idx = rand.Uint64()
+	c.idx = atomic.AddUint32(&globalConnCounter, 1)
 	c.tr = http.DefaultTransport
 	c.read = newReadConn(c.idx, 'c')
 	return c
@@ -113,12 +115,12 @@ func (c *ClientConn) sendWriteBuf() {
 	}
 
 	f := Frame{
-		Idx:       c.write.counter + 1,
-		StreamIdx: c.idx,
-		Data:      c.write.buf,
+		Idx:     c.write.counter + 1,
+		ConnIdx: c.idx,
+		Data:    c.write.buf,
 	}
 
-	resp, err := client.Post(c.endpoint+"?s="+strconv.FormatUint(c.idx, 10), "application/octet-stream", f.Marshal())
+	resp, err := client.Post(c.endpoint+"?s="+strconv.Itoa(int(c.idx)), "application/octet-stream", f.Marshal())
 	if err != nil {
 		c.read.feedError(err)
 		return

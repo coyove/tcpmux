@@ -13,7 +13,7 @@ import (
 )
 
 type ServerConn struct {
-	idx        uint64
+	idx        uint32
 	counter    uint64
 	schedPurge sched.SchedKey
 
@@ -93,14 +93,15 @@ func Listen(network string, address string) (net.Listener, error) {
 	return l, nil
 }
 
-func NewServerConn(idx uint64) *ServerConn {
+func NewServerConn(idx uint32) *ServerConn {
 	c := &ServerConn{idx: idx}
 	c.read = newReadConn(c.idx, 's')
 	return c
 }
 
 func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
-	connIdx, _ := strconv.ParseUint(r.FormValue("s"), 10, 64)
+	_connIdx, _ := strconv.ParseUint(r.FormValue("s"), 10, 64)
+	connIdx := uint32(_connIdx)
 
 	var conn *ServerConn
 	l.connsmu.Lock()
@@ -132,9 +133,9 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 	defer conn.write.mu.Unlock()
 
 	f := Frame{
-		Idx:       conn.write.counter + 1,
-		StreamIdx: conn.idx,
-		Data:      conn.write.buf,
+		Idx:     conn.write.counter + 1,
+		ConnIdx: conn.idx,
+		Data:    conn.write.buf,
 	}
 
 	if _, err := io.Copy(w, f.Marshal()); err != nil {

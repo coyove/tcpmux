@@ -12,23 +12,23 @@ const (
 )
 
 type Frame struct {
-	Idx       uint64
-	StreamIdx uint64
-	Options   byte
-	Data      []byte
+	Idx     uint64
+	ConnIdx uint32
+	Options byte
+	Data    []byte
 }
 
 func (f Frame) Marshal() io.Reader {
-	buf := [24]byte{}
+	buf := [16]byte{}
 	binary.BigEndian.PutUint64(buf[:8], f.Idx)
-	binary.BigEndian.PutUint64(buf[8:16], f.StreamIdx)
-	binary.BigEndian.PutUint32(buf[16:], uint32(len(f.Data)))
-	buf[23] = f.Options
+	binary.BigEndian.PutUint32(buf[8:12], f.ConnIdx)
+	binary.LittleEndian.PutUint32(buf[12:], uint32(len(f.Data))&0xffffff)
+	buf[len(buf)-1] = f.Options
 	return io.MultiReader(bytes.NewReader(buf[:]), bytes.NewReader(f.Data))
 }
 
 func ParseFrame(r io.Reader) (f Frame, ok bool) {
-	header := [24]byte{}
+	header := [16]byte{}
 	if n, err := io.ReadAtLeast(r, header[:], len(header)); err != nil || n != len(header) {
 		if err == io.EOF {
 			ok = true
@@ -36,15 +36,15 @@ func ParseFrame(r io.Reader) (f Frame, ok bool) {
 		return
 	}
 
-	datalen := int(binary.BigEndian.Uint32(header[16:]))
+	datalen := int(binary.LittleEndian.Uint32(header[12:]) & 0xffffff)
 	data := make([]byte, datalen)
 	if n, err := io.ReadAtLeast(r, data, datalen); err != nil || n != datalen {
 		return
 	}
 
 	f.Idx = binary.BigEndian.Uint64(header[:8])
-	f.StreamIdx = binary.BigEndian.Uint64(header[8:16])
+	f.ConnIdx = binary.BigEndian.Uint32(header[8:12])
 	f.Data = data
-	f.Options = header[23]
+	f.Options = header[len(header)-1]
 	return f, true
 }
