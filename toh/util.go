@@ -10,8 +10,9 @@ import (
 )
 
 var (
-	debug   = false
-	Verbose = true
+	debug          = false
+	randomFailures = false
+	Verbose        = true
 )
 
 func debugprint(v ...interface{}) {

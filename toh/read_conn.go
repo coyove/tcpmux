@@ -18,24 +18,23 @@ var (
 
 type readConn struct {
 	sync.Mutex
-	counter       uint64             // counter, must be synced with the writer on the other side
-	buf           []byte             // read buffer
-	frames        chan frame         // incoming frames
-	futureframes  map[uint64]frame   // future frames, which have arrived early
-	missingframes map[uint64]uint64  // missing frames, readConn is waiting for their arrivals
-	ready         *waitobject.Object // it being touched means that data in "buf" are ready
-	err           error              // stored error, if presented, all operations afterwards should return it
-	blk           cipher.Block       // cipher block, aes-128
-	closed        bool               // is readConn closed already
-	tag           byte               // tag, 'c' for readConn in ClientConn, 's' for readConn in ServerConn
-	idx           uint32             // readConn index, should be the same as the one in ClientConn/SerevrConn
+	counter      uint64             // counter, must be synced with the writer on the other side
+	buf          []byte             // read buffer
+	frames       chan frame         // incoming frames
+	futureframes map[uint64]frame   // future frames, which have arrived early
+	futureSize   int                // total size of future frames, if it goes too high, readConn will close
+	ready        *waitobject.Object // it being touched means that data in "buf" are ready
+	err          error              // stored error, if presented, all operations afterwards should return it
+	blk          cipher.Block       // cipher block, aes-128
+	closed       bool               // is readConn closed already
+	tag          byte               // tag, 'c' for readConn in ClientConn, 's' for readConn in ServerConn
+	idx          uint32             // readConn index, should be the same as the one in ClientConn/SerevrConn
 }
 
 func newReadConn(idx uint32, blk cipher.Block, tag byte) *readConn {
 	r := &readConn{
-		frames:        make(chan frame, 1024),
-		futureframes:  map[uint64]frame{},
-		missingframes: map[uint64]uint64{},
+		frames:       make(chan frame, 1024),
+		futureframes: map[uint64]frame{},
 		//sentframes:    lru.NewCache(WriteCacheSize),
 		idx:   idx,
 		tag:   tag,
@@ -128,23 +127,20 @@ func (c *readConn) readLoopRearrange() {
 			}
 
 			c.futureframes[f.idx] = f
+			c.futureSize += len(f.data)
 			for {
 				idx := c.counter + 1
 				if f, ok := c.futureframes[idx]; ok {
 					c.buf = append(c.buf, f.data...)
 					c.counter = f.idx
 					delete(c.futureframes, f.idx)
-					delete(c.missingframes, f.idx)
+					c.futureSize -= len(f.data)
 				} else {
-					c.missingframes[idx]++
-
-					if x := c.missingframes[idx]; x > 16 {
+					if c.futureSize > MaxMissingSize {
 						c.Unlock()
 						c.feedError(fmt.Errorf("fatal: missing certain frame"))
-						vprint("missings: ", c.missingframes, ", futures: ", c.futureframes)
+						vprint("missings: ", idx, ", futures: ", c.futureframes)
 						return
-					} else if x > 2 {
-						vprint("temp missing: ", idx, ", tries: ", x)
 					}
 					break
 				}
