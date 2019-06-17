@@ -5,8 +5,11 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
+	"runtime/pprof"
 	"strings"
 	"testing"
+	"time"
 )
 
 type client int
@@ -47,6 +50,15 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func TestProxy(t *testing.T) {
+
+	go func() {
+		for {
+			time.Sleep(2 * time.Second)
+			f, _ := os.Create("heap.txt")
+			pprof.Lookup("goroutine").WriteTo(f, 1)
+			//fmt.Println("profile")
+		}
+	}()
 	go func() {
 		log.Println("hello")
 		go http.ListenAndServe(":10000", new(client))

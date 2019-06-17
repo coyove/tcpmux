@@ -63,7 +63,9 @@ func (c *readConn) feedframes(r io.Reader) (datalen int, err error) {
 	for {
 		f, ok := parseframe(r, c.blk)
 		if !ok {
-			return 0, fmt.Errorf("invalid frames")
+			err = fmt.Errorf("invalid frames")
+			c.feedError(err)
+			return 0, err
 		}
 		if f.idx == 0 {
 			break
@@ -88,7 +90,7 @@ func (c *readConn) feedframes(r io.Reader) (datalen int, err error) {
 func (c *readConn) feedError(err error) {
 	c.err = err
 	c.ready.Touch(dummyTouch)
-	// readLoop will still continue
+	c.close()
 }
 
 func (c *readConn) close() {
@@ -105,6 +107,8 @@ func (c *readConn) close() {
 func (c *readConn) readLoopRearrange() {
 	for {
 		select {
+		//		case <-time.After(time.Second * 10):
+		//			vprint("timeout")
 		case f, ok := <-c.frames:
 			if !ok {
 				return
