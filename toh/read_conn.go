@@ -17,35 +17,36 @@ var (
 )
 
 type readConn struct {
-	counter       uint64
-	mu            sync.Mutex
-	buf           []byte
-	frames        chan Frame
-	futureFrames  map[uint64]Frame
-	missingFrames map[uint64]uint64
-	ready         *waitobject.Object
-	err           error
-	blk           cipher.Block
-	closed        bool
-	tag           byte
-	idx           uint32
+	sync.Mutex
+	counter       uint64             // counter, must be synced with the writer on the other side
+	buf           []byte             // read buffer
+	frames        chan frame         // incoming frames
+	futureframes  map[uint64]frame   // future frames, which have arrived early
+	missingframes map[uint64]uint64  // missing frames, readConn is waiting for their arrivals
+	ready         *waitobject.Object // it being touched means that data in "buf" are ready
+	err           error              // stored error, if presented, all operations afterwards should return it
+	blk           cipher.Block       // cipher block, aes-128
+	closed        bool               // is readConn closed already
+	tag           byte               // tag, 'c' for readConn in ClientConn, 's' for readConn in ServerConn
+	idx           uint32             // readConn index, should be the same as the one in ClientConn/SerevrConn
 }
 
 func newReadConn(idx uint32, blk cipher.Block, tag byte) *readConn {
 	r := &readConn{
-		frames:        make(chan Frame, 1024),
-		futureFrames:  map[uint64]Frame{},
-		missingFrames: map[uint64]uint64{},
-		idx:           idx,
-		tag:           tag,
-		blk:           blk,
+		frames:        make(chan frame, 1024),
+		futureframes:  map[uint64]frame{},
+		missingframes: map[uint64]uint64{},
+		//sentframes:    lru.NewCache(WriteCacheSize),
+		idx:   idx,
+		tag:   tag,
+		blk:   blk,
+		ready: waitobject.New(),
 	}
-	r.ready = waitobject.New()
 	go r.readLoopRearrange()
 	return r
 }
 
-func (c *readConn) feedFrames(r io.Reader) (datalen int, err error) {
+func (c *readConn) feedframes(r io.Reader) (datalen int, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			// Dirty way to avoid closed channel panic
@@ -60,11 +61,11 @@ func (c *readConn) feedFrames(r io.Reader) (datalen int, err error) {
 
 	count := 0
 	for {
-		f, ok := ParseFrame(r, c.blk)
+		f, ok := parseframe(r, c.blk)
 		if !ok {
 			return 0, fmt.Errorf("invalid frames")
 		}
-		if f.Idx == 0 {
+		if f.idx == 0 {
 			break
 		}
 		if c.closed {
@@ -73,10 +74,13 @@ func (c *readConn) feedFrames(r io.Reader) (datalen int, err error) {
 		if c.err != nil {
 			return 0, c.err
 		}
+		if f.options&optSyncIdx > 0 {
+			continue
+		}
 
-		debugprint("feed: ", string(f.Data))
+		debugprint("feed: ", f.data)
 		c.frames <- f
-		count += len(f.Data)
+		count += len(f.data)
 	}
 	return count, nil
 }
@@ -88,8 +92,8 @@ func (c *readConn) feedError(err error) {
 }
 
 func (c *readConn) close() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.Lock()
+	defer c.Unlock()
 	if c.closed {
 		return
 	}
@@ -106,34 +110,34 @@ func (c *readConn) readLoopRearrange() {
 				return
 			}
 
-			c.mu.Lock()
-			if f.ConnIdx != c.idx {
-				c.mu.Unlock()
+			c.Lock()
+			if f.connIdx != c.idx {
+				c.Unlock()
 				c.feedError(fmt.Errorf("fatal: unmatched stream index"))
 				return
 			}
 
-			if f.Idx <= c.counter {
-				c.mu.Unlock()
+			if f.idx <= c.counter {
+				c.Unlock()
 				//c.feedError(fmt.Errorf("unmatched counter, maybe server GCed the connection"))
 				return
 			}
 
-			c.futureFrames[f.Idx] = f
+			c.futureframes[f.idx] = f
 			for {
 				idx := c.counter + 1
-				if f, ok := c.futureFrames[idx]; ok {
-					c.buf = append(c.buf, f.Data...)
-					c.counter = f.Idx
-					delete(c.futureFrames, f.Idx)
-					delete(c.missingFrames, f.Idx)
+				if f, ok := c.futureframes[idx]; ok {
+					c.buf = append(c.buf, f.data...)
+					c.counter = f.idx
+					delete(c.futureframes, f.idx)
+					delete(c.missingframes, f.idx)
 				} else {
-					c.missingFrames[idx]++
+					c.missingframes[idx]++
 
-					if x := c.missingFrames[idx]; x > 16 {
-						c.mu.Unlock()
+					if x := c.missingframes[idx]; x > 16 {
+						c.Unlock()
 						c.feedError(fmt.Errorf("fatal: missing certain frame"))
-						vprint("missings: ", c.missingFrames, ", futures: ", c.futureFrames)
+						vprint("missings: ", c.missingframes, ", futures: ", c.futureframes)
 						return
 					} else if x > 2 {
 						vprint("temp missing: ", idx, ", tries: ", x)
@@ -141,7 +145,7 @@ func (c *readConn) readLoopRearrange() {
 					break
 				}
 			}
-			c.mu.Unlock()
+			c.Unlock()
 			c.ready.Touch(dummyTouch)
 		}
 	}
@@ -161,14 +165,14 @@ READ:
 		return 0, fmt.Errorf("timeout")
 	}
 
-	c.mu.Lock()
+	c.Lock()
 	if len(c.buf) > 0 {
 		n = copy(p, c.buf)
 		c.buf = c.buf[n:]
-		c.mu.Unlock()
+		c.Unlock()
 		return
 	}
-	c.mu.Unlock()
+	c.Unlock()
 
 	_, ontime := c.ready.Wait()
 

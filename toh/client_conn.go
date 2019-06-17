@@ -13,17 +13,22 @@ import (
 	"github.com/coyove/common/sched"
 )
 
-var DefaultTransport = &http.Transport{
-	DialContext: (&net.Dialer{
-		Timeout:   30 * time.Second,
-		KeepAlive: 30 * time.Second,
-		DualStack: true,
-	}).DialContext,
-	MaxIdleConns:          1,
-	IdleConnTimeout:       90 * time.Second,
-	TLSHandshakeTimeout:   10 * time.Second,
-	ExpectContinueTimeout: 1 * time.Second,
-}
+var (
+	DefaultTransport = &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+			DualStack: true,
+		}).DialContext,
+		MaxIdleConns:          1,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+
+	MaxWriteBufferSize = 1024 * 1024 * 2
+	ErrBigWriteBuf     = fmt.Errorf("writer size exceeds limit, reader may be dead")
+)
 
 type ClientConn struct {
 	idx      uint32
@@ -63,8 +68,8 @@ func newClientConn(endpoint string, blk cipher.Block) (*ClientConn, error) {
 
 	// Say hello
 	client := &http.Client{Transport: DefaultTransport}
-	f := Frame{ConnIdx: c.idx, Options: OptHello, Data: []byte{}}
-	req, _ := http.NewRequest("POST", c.endpoint, f.Marshal(c.read.blk))
+	f := frame{connIdx: c.idx, options: optHello, data: []byte{}}
+	req, _ := http.NewRequest("POST", c.endpoint, f.marshal(c.read.blk))
 	req.Header.Add("ETag", connIdxToString(c.read.blk, c.idx))
 	resp, err := client.Do(req)
 	if err != nil {
@@ -114,6 +119,10 @@ func (c *ClientConn) Write(p []byte) (n int, err error) {
 		return 0, ErrClosedConn
 	}
 
+	if len(c.write.buf) > MaxWriteBufferSize {
+		return 0, ErrBigWriteBuf
+	}
+
 	c.write.Lock()
 	c.write.sched.Cancel()
 	c.write.sched = sched.Schedule(func() {
@@ -133,12 +142,14 @@ func (c *ClientConn) Write(p []byte) (n int, err error) {
 
 func (c *ClientConn) schedSending() {
 	atomic.AddInt64(&c.write.survey.reschedCount, 1)
+
+	if c.read.err != nil || c.read.closed {
+		vprint(c, " schedSending out")
+		return
+	}
+
 	c.sendWriteBuf()
 	c.write.sched = sched.Schedule(func() {
-		if c.read.err != nil || c.read.closed {
-			vprint(c, " schedSending out")
-			return
-		}
 		c.write.survey.pendingSize = 1
 		c.schedSending()
 	}, time.Now().Add(time.Second))
@@ -158,13 +169,18 @@ func (c *ClientConn) sendWriteBuf() {
 
 	client := &http.Client{Transport: DefaultTransport}
 
-	f := Frame{
-		Idx:     c.write.counter + 1,
-		ConnIdx: c.idx,
-		Data:    c.write.buf,
+	f := frame{
+		idx:     c.write.counter + 1,
+		connIdx: c.idx,
+		data:    c.write.buf,
+		next: &frame{
+			idx:     c.read.counter,
+			options: optSyncIdx,
+			data:    []byte{},
+		},
 	}
 
-	req, _ := http.NewRequest("POST", c.endpoint, f.Marshal(c.read.blk))
+	req, _ := http.NewRequest("POST", c.endpoint, f.marshal(c.read.blk))
 	req.Header.Add("ETag", connIdxToString(c.read.blk, c.idx))
 	resp, err := client.Do(req)
 	if err != nil {
@@ -182,7 +198,7 @@ func (c *ClientConn) sendWriteBuf() {
 	c.write.counter++
 
 	go func() {
-		c.read.feedFrames(resp.Body)
+		c.read.feedframes(resp.Body)
 		resp.Body.Close()
 	}()
 }

@@ -10,15 +10,16 @@ import (
 )
 
 const (
-	OptResend = 1 << iota
-	OptHello
+	optSyncIdx = 1 << iota
+	optHello
 )
 
-type Frame struct {
-	Idx     uint64
-	ConnIdx uint32
-	Options byte
-	Data    []byte
+type frame struct {
+	idx     uint64
+	connIdx uint32
+	options byte
+	data    []byte
+	next    *frame
 }
 
 func connIdxToString(blk cipher.Block, idx uint32) string {
@@ -39,21 +40,25 @@ func stringToConnIdx(blk cipher.Block, v string) (uint32, bool) {
 	return binary.BigEndian.Uint32(p), string(p[12:]) == "toh."
 }
 
-func (f Frame) Marshal(blk cipher.Block) io.Reader {
+func (f *frame) marshal(blk cipher.Block) io.Reader {
 	buf := [16]byte{}
-	binary.BigEndian.PutUint64(buf[:8], f.Idx)
-	binary.BigEndian.PutUint32(buf[8:12], f.ConnIdx)
+	binary.BigEndian.PutUint64(buf[:8], f.idx)
+	binary.BigEndian.PutUint32(buf[8:12], f.connIdx)
 
 	gcm, _ := cipher.NewGCM(blk)
-	f.Data = gcm.Seal(f.Data[:0], buf[:12], f.Data, nil)
-	binary.LittleEndian.PutUint32(buf[12:], uint32(len(f.Data))&0xffffff)
-	buf[len(buf)-1] = f.Options
+	f.data = gcm.Seal(f.data[:0], buf[:12], f.data, nil)
+	binary.LittleEndian.PutUint32(buf[12:], uint32(len(f.data))&0xffffff)
+	buf[len(buf)-1] = f.options
 
 	blk.Encrypt(buf[:], buf[:])
-	return io.MultiReader(bytes.NewReader(buf[:]), bytes.NewReader(f.Data))
+
+	if f.next == nil {
+		return io.MultiReader(bytes.NewReader(buf[:]), bytes.NewReader(f.data))
+	}
+	return io.MultiReader(bytes.NewReader(buf[:]), bytes.NewReader(f.data), f.next.marshal(blk))
 }
 
-func ParseFrame(r io.Reader, blk cipher.Block) (f Frame, ok bool) {
+func parseframe(r io.Reader, blk cipher.Block) (f frame, ok bool) {
 	header := [16]byte{}
 	if n, err := io.ReadAtLeast(r, header[:], len(header)); err != nil || n != len(header) {
 		if err == io.EOF {
@@ -76,9 +81,9 @@ func ParseFrame(r io.Reader, blk cipher.Block) (f Frame, ok bool) {
 		return
 	}
 
-	f.Idx = binary.BigEndian.Uint64(header[:8])
-	f.ConnIdx = binary.BigEndian.Uint32(header[8:12])
-	f.Data = data
-	f.Options = header[len(header)-1]
+	f.idx = binary.BigEndian.Uint64(header[:8])
+	f.connIdx = binary.BigEndian.Uint32(header[8:12])
+	f.data = data
+	f.options = header[len(header)-1]
 	return f, true
 }

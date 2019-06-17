@@ -103,7 +103,7 @@ func Listen(network string, address string) (net.Listener, error) {
 	return l, nil
 }
 
-func NewServerConn(idx uint32, ln *Listener) *ServerConn {
+func newServerConn(idx uint32, ln *Listener) *ServerConn {
 	c := &ServerConn{idx: idx}
 	c.rev = ln
 	c.read = newReadConn(c.idx, ln.blk, 's')
@@ -135,14 +135,14 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 		l.connsmu.Unlock()
 	} else {
 		// New incoming connection?
-		f, ok := ParseFrame(r.Body, l.blk)
-		if !ok || f.Options&OptHello == 0 || f.ConnIdx != connIdx {
+		f, ok := parseframe(r.Body, l.blk)
+		if !ok || f.options&optHello == 0 || f.connIdx != connIdx {
 			l.randomReply(w)
 			l.connsmu.Unlock()
 			return
 		}
 
-		conn = NewServerConn(connIdx, l)
+		conn = newServerConn(connIdx, l)
 		l.conns[connIdx] = conn
 		l.pendingConns <- conn
 		vprint("server: new conn: ", conn)
@@ -150,7 +150,7 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if datalen, err := conn.read.feedFrames(r.Body); err != nil {
+	if datalen, err := conn.read.feedframes(r.Body); err != nil {
 		debugprint("listener feed frames, error: ", err, ", ", conn, " will be deleted")
 		conn.Close()
 		return
@@ -167,13 +167,18 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 
 	conn.write.mu.Lock()
 
-	f := Frame{
-		Idx:     conn.write.counter + 1,
-		ConnIdx: conn.idx,
-		Data:    conn.write.buf,
+	f := frame{
+		idx:     conn.write.counter + 1,
+		connIdx: conn.idx,
+		data:    conn.write.buf,
+		next: &frame{
+			idx:     conn.read.counter,
+			options: optSyncIdx,
+			data:    []byte{},
+		},
 	}
 
-	if _, err := io.Copy(w, f.Marshal(conn.read.blk)); err != nil {
+	if _, err := io.Copy(w, f.marshal(conn.read.blk)); err != nil {
 		vprint("failed to response to client, error: ", err)
 		conn.read.feedError(err)
 		conn.Close()
@@ -209,6 +214,10 @@ func (c *ServerConn) Write(p []byte) (n int, err error) {
 		return 0, c.read.err
 	}
 
+	if len(c.write.buf) > MaxWriteBufferSize {
+		return 0, ErrBigWriteBuf
+	}
+
 	c.write.mu.Lock()
 	c.write.buf = append(c.write.buf, p...)
 	c.write.mu.Unlock()
@@ -236,4 +245,8 @@ func (c *ServerConn) RemoteAddr() net.Addr {
 
 func (c *ServerConn) LocalAddr() net.Addr {
 	return c.rev.Addr()
+}
+
+func (c *ServerConn) String() string {
+	return fmt.Sprintf("<ServerConn_%d_read_%v_write_%d>", c.idx, c.read, c.write.counter)
 }
