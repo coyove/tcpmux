@@ -19,7 +19,6 @@ type ServerConn struct {
 	rev        *Listener
 	counter    uint64
 	schedPurge sched.SchedKey
-	blk        cipher.Block
 
 	write struct {
 		mu      sync.Mutex
@@ -89,8 +88,14 @@ func Listen(network string, address string) (net.Listener, error) {
 
 	if Verbose {
 		go func() {
-			for range time.Tick(time.Second) {
-				vprint("listener active connections: ", len(l.conns), ", global counter: ", globalConnCounter)
+			for range time.Tick(time.Second * 5) {
+				ln := 0
+				l.connsmu.Lock()
+				for _, conn := range l.conns {
+					ln += len(conn.write.buf)
+				}
+				l.connsmu.Unlock()
+				vprint("listener active connections: ", len(l.conns), ", pending bytes: ", ln)
 			}
 		}()
 	}
@@ -101,22 +106,25 @@ func Listen(network string, address string) (net.Listener, error) {
 func NewServerConn(idx uint32, ln *Listener) *ServerConn {
 	c := &ServerConn{idx: idx}
 	c.rev = ln
-	c.blk = ln.blk
-	c.read = newReadConn(c.idx, c.blk, 's')
+	c.read = newReadConn(c.idx, ln.blk, 's')
 	return c
 }
 
-func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
-	connIdx, ok := stringToConnIdx(l.blk, r.FormValue("s"))
-	if !ok {
-		p := [256]byte{}
-		for {
-			if rand.Intn(8) == 0 {
-				break
-			}
-			rand.Read(p[:])
-			w.Write(p[:rand.Intn(128)+128])
+func (l *Listener) randomReply(w http.ResponseWriter) {
+	p := [256]byte{}
+	for {
+		if rand.Intn(8) == 0 {
+			break
 		}
+		rand.Read(p[:])
+		w.Write(p[:rand.Intn(128)+128])
+	}
+}
+
+func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
+	connIdx, ok := stringToConnIdx(l.blk, r.Header.Get("ETag"))
+	if !ok {
+		l.randomReply(w)
 		return
 	}
 
@@ -124,12 +132,23 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 	l.connsmu.Lock()
 	if sc, _ := l.conns[connIdx]; sc != nil {
 		conn = sc
+		l.connsmu.Unlock()
 	} else {
+		// New incoming connection?
+		f, ok := ParseFrame(r.Body, l.blk)
+		if !ok || f.Options&OptHello == 0 || f.ConnIdx != connIdx {
+			l.randomReply(w)
+			l.connsmu.Unlock()
+			return
+		}
+
 		conn = NewServerConn(connIdx, l)
 		l.conns[connIdx] = conn
 		l.pendingConns <- conn
+		vprint("server: new conn: ", conn)
+		l.connsmu.Unlock()
+		return
 	}
-	l.connsmu.Unlock()
 
 	if datalen, err := conn.read.feedFrames(r.Body); err != nil {
 		debugprint("listener feed frames, error: ", err, ", ", conn, " will be deleted")
@@ -154,7 +173,7 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 		Data:    conn.write.buf,
 	}
 
-	if _, err := io.Copy(w, f.Marshal(conn.blk)); err != nil {
+	if _, err := io.Copy(w, f.Marshal(conn.read.blk)); err != nil {
 		vprint("failed to response to client, error: ", err)
 		conn.read.feedError(err)
 		conn.Close()
@@ -201,6 +220,7 @@ func (c *ServerConn) Read(p []byte) (n int, err error) {
 }
 
 func (c *ServerConn) Close() error {
+	vprint("server: close conn: ", c)
 	c.schedPurge.Cancel()
 	c.read.close()
 	c.rev.connsmu.Lock()

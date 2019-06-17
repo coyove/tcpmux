@@ -115,7 +115,7 @@ func (c *readConn) readLoopRearrange() {
 
 			if f.Idx <= c.counter {
 				c.mu.Unlock()
-				c.feedError(fmt.Errorf("unmatched counter, maybe server GCed the connection"))
+				//c.feedError(fmt.Errorf("unmatched counter, maybe server GCed the connection"))
 				return
 			}
 
