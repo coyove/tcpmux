@@ -166,7 +166,7 @@ READ:
 	}
 
 	if c.ready.IsTimedout() {
-		return 0, fmt.Errorf("timeout")
+		return 0, &timeoutError{}
 	}
 
 	c.Lock()
@@ -185,7 +185,7 @@ READ:
 	}
 
 	if !ontime {
-		return 0, fmt.Errorf("timeout")
+		return 0, &timeoutError{}
 	}
 
 	goto READ
@@ -194,3 +194,11 @@ READ:
 func (c *readConn) String() string {
 	return fmt.Sprintf("<readConn_%d_%s_ctr_%d>", c.idx, string(c.tag), c.counter)
 }
+
+type timeoutError struct{}
+
+func (e *timeoutError) Error() string { return "operation timed out" }
+
+func (e *timeoutError) Timeout() bool { return true }
+
+func (e *timeoutError) Temporary() bool { return false }

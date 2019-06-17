@@ -22,12 +22,14 @@ var (
 		}).DialContext,
 		MaxIdleConns:          1,
 		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 	}
-
+	InactivePurge      = time.Minute
 	MaxWriteBufferSize = 1024 * 1024 * 2
 	ErrBigWriteBuf     = fmt.Errorf("writer size exceeds limit, reader may be dead")
+	OnRequestServer    = func() *http.Transport { return DefaultTransport }
+
+	globalConnCounter uint32 = 0
 )
 
 type ClientConn struct {
@@ -56,8 +58,6 @@ func Dial(network string, address string) (net.Conn, error) {
 	}
 	return c, nil
 }
-
-var globalConnCounter uint32 = 0
 
 func newClientConn(endpoint string, blk cipher.Block) (*ClientConn, error) {
 	c := &ClientConn{endpoint: endpoint}
@@ -167,7 +167,10 @@ func (c *ClientConn) sendWriteBuf() {
 		return
 	}
 
-	client := &http.Client{Transport: DefaultTransport}
+	client := &http.Client{
+		Timeout:   InactivePurge * 2,
+		Transport: OnRequestServer(),
+	}
 
 	f := frame{
 		idx:     c.write.counter + 1,

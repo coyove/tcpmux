@@ -37,8 +37,6 @@ type Listener struct {
 	httpServeErr chan error
 	pendingConns chan *ServerConn
 	blk          cipher.Block
-
-	InactivePurge time.Duration
 }
 
 func (l *Listener) Close() error {
@@ -71,11 +69,10 @@ func Listen(network string, address string) (net.Listener, error) {
 	}
 
 	l := &Listener{
-		ln:            ln,
-		httpServeErr:  make(chan error, 1),
-		pendingConns:  make(chan *ServerConn, 1024),
-		conns:         map[uint32]*ServerConn{},
-		InactivePurge: 60 * time.Second,
+		ln:           ln,
+		httpServeErr: make(chan error, 1),
+		pendingConns: make(chan *ServerConn, 1024),
+		conns:        map[uint32]*ServerConn{},
 	}
 
 	l.blk, _ = aes.NewCipher([]byte(network + "0123456789abcdef")[:16])
@@ -162,7 +159,7 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 		// are meaningless
 		// So we won't reschedule its deadline: it will die as expected
 	} else {
-		conn.schedPurge.Reschedule(func() { conn.Close() }, time.Now().Add(l.InactivePurge))
+		conn.schedPurge.Reschedule(func() { conn.Close() }, time.Now().Add(InactivePurge))
 	}
 
 	conn.write.mu.Lock()

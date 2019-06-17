@@ -76,7 +76,7 @@ func TestHTTPServer(t *testing.T) {
 
 	go func() {
 		ln, _ = Listen("tcp", "127.0.0.1:13739")
-		ln.(*Listener).InactivePurge = 10 * time.Second
+		//ln.(*Listener).InactivePurge = 10 * time.Second
 
 		ready <- true
 		mux := http.NewServeMux()
