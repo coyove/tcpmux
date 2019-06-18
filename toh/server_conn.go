@@ -21,7 +21,7 @@ type ServerConn struct {
 	schedPurge sched.SchedKey
 
 	write struct {
-		mu      sync.Mutex
+		sync.Mutex
 		buf     []byte
 		counter uint64
 	}
@@ -162,8 +162,9 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 		conn.schedPurge.Reschedule(func() { conn.Close() }, time.Now().Add(InactivePurge))
 	}
 
-	conn.write.mu.Lock()
+	conn.write.Lock()
 
+	deadline := time.Now().Add(InactivePurge - time.Second)
 	f := frame{
 		idx:     conn.write.counter + 1,
 		connIdx: conn.idx,
@@ -175,7 +176,11 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
+AGAIN:
 	if _, err := io.Copy(w, f.marshal(conn.read.blk)); err != nil {
+		if time.Now().Before(deadline) {
+			goto AGAIN
+		}
 		vprint("failed to response to client, error: ", err)
 		conn.read.feedError(err)
 		conn.Close()
@@ -184,7 +189,7 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 		conn.write.counter++
 	}
 
-	conn.write.mu.Unlock()
+	conn.write.Unlock()
 }
 
 func (c *ServerConn) SetReadDeadline(t time.Time) error {
@@ -215,9 +220,9 @@ func (c *ServerConn) Write(p []byte) (n int, err error) {
 		return 0, ErrBigWriteBuf
 	}
 
-	c.write.mu.Lock()
+	c.write.Lock()
 	c.write.buf = append(c.write.buf, p...)
-	c.write.mu.Unlock()
+	c.write.Unlock()
 	return len(p), nil
 }
 

@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/hex"
+	"fmt"
 	"io"
 )
 
@@ -86,4 +87,8 @@ func parseframe(r io.Reader, blk cipher.Block) (f frame, ok bool) {
 	f.data = data
 	f.options = header[len(header)-1]
 	return f, true
+}
+
+func (f frame) String() string {
+	return fmt.Sprintf("<frame_%d_conn_%d_(%d)_len_%d>", f.idx, f.connIdx, f.options, len(f.data))
 }
