@@ -26,6 +26,7 @@ var (
 		ExpectContinueTimeout: 1 * time.Second,
 	}
 	InactivePurge      = time.Minute
+	ClientReadTimeout  = time.Second * 15
 	MaxWriteBufferSize = 1024 * 1024 * 2
 	ErrBigWriteBuf     = fmt.Errorf("writer size exceeds limit, reader may be dead")
 	OnRequestServer    = func() *http.Transport { return DefaultTransport }
@@ -66,7 +67,7 @@ func newClientConn(endpoint string, blk cipher.Block) (*ClientConn, error) {
 	c := &ClientConn{endpoint: endpoint}
 	c.idx = atomic.AddUint32(&globalConnCounter, 1)
 	c.write.sched = sched.Schedule(c.schedSending, time.Now().Add(time.Second))
-	c.write.survey.pendingSize = 64
+	c.write.survey.pendingSize = 1
 	c.write.respCh = make(chan io.ReadCloser, 16)
 	c.read = newReadConn(c.idx, blk, 'c')
 
@@ -84,6 +85,7 @@ func newClientConn(endpoint string, blk cipher.Block) (*ClientConn, error) {
 		return nil, fmt.Errorf("remote is unavailable: %s", resp.Status)
 	}
 
+	go c.respLoop()
 	go c.respLoop()
 	return c, nil
 }
@@ -131,8 +133,7 @@ func (c *ClientConn) Write(p []byte) (n int, err error) {
 	}
 
 	c.write.Lock()
-	c.write.sched.Cancel()
-	c.write.sched = sched.Schedule(func() {
+	c.write.sched.Reschedule(func() {
 		c.write.survey.pendingSize = 1
 		c.schedSending()
 	}, time.Now().Add(time.Second))
@@ -186,7 +187,7 @@ func (c *ClientConn) sendWriteBuf() {
 		},
 	}
 
-	deadline := time.Now().Add(InactivePurge)
+	deadline := time.Now().Add(InactivePurge - time.Second)
 	send := func() (*http.Response, error) {
 		client := &http.Client{
 			Timeout:   time.Second * 5,
@@ -217,7 +218,10 @@ func (c *ClientConn) sendWriteBuf() {
 				return
 			}
 		} else {
-			c.write.respCh <- resp.Body
+			func() {
+				defer func() { recover() }()
+				c.write.respCh <- resp.Body
+			}()
 			break
 		}
 	}
@@ -230,7 +234,10 @@ func (c *ClientConn) respLoop() {
 			if !ok {
 				return
 			}
+
+			k := sched.ScheduleSync(func() { body.Close() }, time.Now().Add(ClientReadTimeout))
 			c.read.feedframes(body)
+			k.Cancel()
 			body.Close()
 		}
 	}
