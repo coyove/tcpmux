@@ -4,7 +4,6 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"fmt"
-	"math/rand"
 	"net"
 	"net/http"
 	"sync"
@@ -27,7 +26,6 @@ var (
 	}
 	InactivePurge      = time.Minute
 	MaxWriteBufferSize = 1024 * 1024 * 2
-	MaxMissingSize     = 1024 * 1024 * 4
 	ErrBigWriteBuf     = fmt.Errorf("writer size exceeds limit, reader may be dead")
 	OnRequestServer    = func() *http.Transport { return DefaultTransport }
 
@@ -47,7 +45,6 @@ type ClientConn struct {
 			pendingSize  int
 			reschedCount int64
 		}
-		failedframes chan frame
 	}
 
 	read *readConn
@@ -67,7 +64,6 @@ func newClientConn(endpoint string, blk cipher.Block) (*ClientConn, error) {
 	c.idx = atomic.AddUint32(&globalConnCounter, 1)
 	c.write.sched = sched.Schedule(c.schedSending, time.Now().Add(time.Second))
 	c.write.survey.pendingSize = 64
-	c.write.failedframes = make(chan frame, 1024)
 	c.read = newReadConn(c.idx, blk, 'c')
 
 	// Say hello
@@ -148,7 +144,7 @@ func (c *ClientConn) schedSending() {
 	atomic.AddInt64(&c.write.survey.reschedCount, 1)
 
 	if c.read.err != nil || c.read.closed {
-		//	vprint(c, " schedSending out")
+		vprint(c, " schedSending out")
 		return
 	}
 
@@ -176,56 +172,35 @@ func (c *ClientConn) sendWriteBuf() {
 		Transport: OnRequestServer(),
 	}
 
-	var f frame
-AGAIN:
-	select {
-	case f = <-c.write.failedframes:
-		if len(f.data) == 0 {
-			goto AGAIN
-		}
-		if f.fails++; f.fails > 16 {
-			c.read.feedError(fmt.Errorf("remote is unavailable"))
-			return
-		}
-		vprint(c, " retry failed frame: ", f)
-	default:
-		f = frame{
-			idx:     c.write.counter + 1,
-			connIdx: c.idx,
-			data:    make([]byte, len(c.write.buf)),
-			next: &frame{
-				idx:     c.read.counter,
-				options: optSyncIdx,
-				data:    []byte{},
-			},
-		}
-		copy(f.data, c.write.buf)
-		c.write.buf = c.write.buf[:0]
-		c.write.counter++
+	f := frame{
+		idx:     c.write.counter + 1,
+		connIdx: c.idx,
+		data:    c.write.buf,
+		next: &frame{
+			idx:     c.read.counter,
+			options: optSyncIdx,
+			data:    []byte{},
+		},
 	}
 
+	req, _ := http.NewRequest("POST", c.endpoint, f.marshal(c.read.blk))
+	req.Header.Add("ETag", connIdxToString(c.read.blk, c.idx))
+	resp, err := client.Do(req)
+	if err != nil {
+		c.read.feedError(err)
+		return
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		c.read.feedError(fmt.Errorf("remote is unavailable: %s", resp.Status))
+		return
+	}
+
+	c.write.buf = c.write.buf[:0]
+	c.write.counter++
+
 	go func() {
-		if randomFailures && rand.Intn(6) == 0 {
-			c.write.failedframes <- f
-			return
-		}
-
-		req, _ := http.NewRequest("POST", c.endpoint, f.marshal(c.read.blk))
-		req.Header.Add("ETag", connIdxToString(c.read.blk, c.idx))
-		resp, err := client.Do(req)
-		if err != nil {
-			//c.read.feedError(err)
-			c.write.failedframes <- f
-			return
-		}
-
-		if resp.StatusCode != http.StatusOK {
-			resp.Body.Close()
-			//c.read.feedError(fmt.Errorf("remote is unavailable: %s", resp.Status))
-			c.write.failedframes <- f
-			return
-		}
-
 		c.read.feedframes(resp.Body)
 		resp.Body.Close()
 	}()

@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/hex"
-	"fmt"
 	"io"
 )
 
@@ -20,9 +19,7 @@ type frame struct {
 	connIdx uint32
 	options byte
 	data    []byte
-
-	next  *frame
-	fails int
+	next    *frame
 }
 
 func connIdxToString(blk cipher.Block, idx uint32) string {
@@ -89,8 +86,4 @@ func parseframe(r io.Reader, blk cipher.Block) (f frame, ok bool) {
 	f.data = data
 	f.options = header[len(header)-1]
 	return f, true
-}
-
-func (f frame) String() string {
-	return fmt.Sprintf("<frame_%d_conn_%d_(%d)_len_%d_fails_%d>", f.idx, f.connIdx, f.options, len(f.data), f.fails)
 }

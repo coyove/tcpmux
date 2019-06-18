@@ -50,7 +50,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func TestProxy(t *testing.T) {
-	randomFailures = true
+
 	go func() {
 		for {
 			time.Sleep(2 * time.Second)

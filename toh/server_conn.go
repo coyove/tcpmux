@@ -21,13 +21,9 @@ type ServerConn struct {
 	schedPurge sched.SchedKey
 
 	write struct {
-		sync.Mutex
+		mu      sync.Mutex
 		buf     []byte
 		counter uint64
-		survey  struct {
-			maxwritetime float64
-			avgwritetime float64
-		}
 	}
 
 	read *readConn
@@ -90,17 +86,13 @@ func Listen(network string, address string) (net.Listener, error) {
 	if Verbose {
 		go func() {
 			for range time.Tick(time.Second * 5) {
-				ln, max, avg := 0, 0.0, 0.0
+				ln := 0
 				l.connsmu.Lock()
 				for _, conn := range l.conns {
 					ln += len(conn.write.buf)
-					if conn.write.survey.maxwritetime > max {
-						max = conn.write.survey.maxwritetime
-						avg = (avg + conn.write.survey.avgwritetime) / 2
-					}
 				}
 				l.connsmu.Unlock()
-				vprint("listener active conns: ", len(l.conns), ", pending: ", ln, "b, max-wr: ", max, "s, avg-wr: ", avg, "s")
+				vprint("listener active connections: ", len(l.conns), ", pending bytes: ", ln)
 			}
 		}()
 	}
@@ -170,7 +162,7 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 		conn.schedPurge.Reschedule(func() { conn.Close() }, time.Now().Add(InactivePurge))
 	}
 
-	conn.write.Lock()
+	conn.write.mu.Lock()
 
 	f := frame{
 		idx:     conn.write.counter + 1,
@@ -183,7 +175,6 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	start := time.Now()
 	if _, err := io.Copy(w, f.marshal(conn.read.blk)); err != nil {
 		vprint("failed to response to client, error: ", err)
 		conn.read.feedError(err)
@@ -191,14 +182,9 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 	} else {
 		conn.write.buf = conn.write.buf[:0]
 		conn.write.counter++
-		secs := time.Since(start).Seconds()
-		if secs > conn.write.survey.maxwritetime {
-			conn.write.survey.maxwritetime = secs
-		}
-		conn.write.survey.avgwritetime = (conn.write.survey.avgwritetime + secs) / 2
 	}
 
-	conn.write.Unlock()
+	conn.write.mu.Unlock()
 }
 
 func (c *ServerConn) SetReadDeadline(t time.Time) error {
@@ -229,9 +215,9 @@ func (c *ServerConn) Write(p []byte) (n int, err error) {
 		return 0, ErrBigWriteBuf
 	}
 
-	c.write.Lock()
+	c.write.mu.Lock()
 	c.write.buf = append(c.write.buf, p...)
-	c.write.Unlock()
+	c.write.mu.Unlock()
 	return len(p), nil
 }
 
