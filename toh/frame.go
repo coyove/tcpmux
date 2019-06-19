@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	optSyncIdx = 1 << iota
+	optSyncCtr = 1 << iota
 	optHello
 )
 

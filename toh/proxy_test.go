@@ -20,6 +20,7 @@ func iocopy(dst io.Writer, src io.Reader) (written int64, err error) {
 	for {
 		nr, er := src.Read(buf)
 		if nr > 0 {
+			//	vprint(string(buf[:1024]))
 			nw, ew := dst.Write(buf[0:nr])
 			if nw > 0 {
 				written += int64(nw)
@@ -61,10 +62,11 @@ func (s *client) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		header, _ := httputil.DumpRequestOut(r, false)
 		x := string(header)
 		up.Write([]byte(x))
+		io.Copy(up, r.Body)
 	}
 
 	go func() { io.Copy(up, down) }()
-	go func() { io.Copy(down, up) }()
+	go func() { iocopy(down, up) }()
 }
 
 func foo(conn net.Conn) {
@@ -86,11 +88,12 @@ func foo(conn net.Conn) {
 		conn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
 	}
 
-	go func() { iocopy(up, down) }()
+	go func() { io.Copy(up, down) }()
 	go func() { io.Copy(conn, up) }()
 }
 
 func TestProxy(t *testing.T) {
+
 	go func() {
 		for {
 			time.Sleep(2 * time.Second)
@@ -99,6 +102,10 @@ func TestProxy(t *testing.T) {
 			//fmt.Println("profile")
 		}
 	}()
+
+	//p, _ := url.Parse("68.183.156.72:8080")
+	//DefaultTransport.Proxy = http.ProxyURL(p)
+	DefaultTransport.MaxConnsPerHost = 10
 
 	go func() {
 		log.Println("hello")

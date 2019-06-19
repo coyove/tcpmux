@@ -119,7 +119,7 @@ func (l *Listener) randomReply(w http.ResponseWriter) {
 }
 
 func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
-	connIdx, ok := stringToConnIdx(l.blk, r.Header.Get("ETag"))
+	connIdx, ok := stringToConnIdx(l.blk, r.Header.Get(hIfMatch))
 	if !ok {
 		l.randomReply(w)
 		return
@@ -167,12 +167,12 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 	deadline := time.Now().Add(InactivePurge - time.Second)
 	f := frame{
 		idx:     conn.write.counter + 1,
-		connIdx: conn.idx,
-		data:    conn.write.buf,
+		options: optSyncCtr,
+		data:    []byte{},
 		next: &frame{
-			idx:     conn.read.counter,
-			options: optSyncIdx,
-			data:    []byte{},
+			idx:     conn.write.counter + 1,
+			connIdx: conn.idx,
+			data:    conn.write.buf,
 		},
 	}
 

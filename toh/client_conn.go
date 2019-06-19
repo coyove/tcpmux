@@ -21,7 +21,7 @@ var (
 			KeepAlive: 30 * time.Second,
 			DualStack: true,
 		}).DialContext,
-		MaxIdleConns:          1,
+		MaxIdleConns:          100,
 		IdleConnTimeout:       90 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 	}
@@ -32,6 +32,11 @@ var (
 	OnRequestServer    = func() *http.Transport { return DefaultTransport }
 
 	globalConnCounter uint32 = 0
+)
+
+const (
+	hIfMatch = "If-Match"
+	hETah    = "ETag"
 )
 
 type ClientConn struct {
@@ -75,7 +80,7 @@ func newClientConn(endpoint string, blk cipher.Block) (*ClientConn, error) {
 	client := &http.Client{Transport: DefaultTransport}
 	f := frame{connIdx: c.idx, options: optHello, data: []byte{}}
 	req, _ := http.NewRequest("POST", c.endpoint, f.marshal(c.read.blk))
-	req.Header.Add("ETag", connIdxToString(c.read.blk, c.idx))
+	req.Header.Add(hIfMatch, connIdxToString(c.read.blk, c.idx))
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -180,11 +185,6 @@ func (c *ClientConn) sendWriteBuf() {
 		idx:     c.write.counter + 1,
 		connIdx: c.idx,
 		data:    c.write.buf,
-		next: &frame{
-			idx:     c.read.counter,
-			options: optSyncIdx,
-			data:    []byte{},
-		},
 	}
 
 	deadline := time.Now().Add(InactivePurge - time.Second)
@@ -195,7 +195,7 @@ func (c *ClientConn) sendWriteBuf() {
 		}
 
 		req, _ := http.NewRequest("POST", c.endpoint, f.marshal(c.read.blk))
-		req.Header.Add("ETag", connIdxToString(c.read.blk, c.idx))
+		req.Header.Add(hIfMatch, connIdxToString(c.read.blk, c.idx))
 		resp, err := client.Do(req)
 		if err != nil {
 			return nil, err

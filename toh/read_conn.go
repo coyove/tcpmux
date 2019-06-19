@@ -58,7 +58,7 @@ func (c *readConn) feedframes(r io.Reader) (datalen int, err error) {
 		}
 	}()
 
-	count := 0
+	count, expectedCtr := 0, uint64(0)
 	for {
 		f, ok := parseframe(r, c.blk)
 		if !ok {
@@ -69,13 +69,19 @@ func (c *readConn) feedframes(r io.Reader) (datalen int, err error) {
 		if f.idx == 0 {
 			break
 		}
+		if expectedCtr > 0 && f.idx != expectedCtr {
+			err = fmt.Errorf("un-synced counter")
+			c.feedError(err)
+			return 0, err
+		}
 		if c.closed {
 			return 0, ErrClosedConn
 		}
 		if c.err != nil {
 			return 0, c.err
 		}
-		if f.options&optSyncIdx > 0 {
+		if f.options&optSyncCtr > 0 {
+			expectedCtr = f.idx
 			continue
 		}
 
