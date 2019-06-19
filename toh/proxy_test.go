@@ -71,7 +71,12 @@ func (s *client) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func foo(conn net.Conn) {
 	down := bufio.NewReader(conn)
-	buf, _ := down.ReadBytes('\n')
+	buf, err := down.ReadBytes('\n')
+	if err != nil || len(buf) < 2 {
+		conn.Close()
+		return
+	}
+
 	host := string(buf)
 	connect := host[0] == 'C'
 	host = host[1 : len(host)-1]
@@ -106,6 +111,7 @@ func TestProxy(t *testing.T) {
 	//p, _ := url.Parse("68.183.156.72:8080")
 	//DefaultTransport.Proxy = http.ProxyURL(p)
 	DefaultTransport.MaxConnsPerHost = 10
+	DefaultTransport.MaxIdleConns = 10
 
 	go func() {
 		log.Println("hello")

@@ -1,10 +1,13 @@
 package toh
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
+	"encoding/base64"
 	"fmt"
 	"io"
+	"math/rand"
 	"net"
 	"net/http"
 	"sync"
@@ -25,6 +28,7 @@ var (
 		IdleConnTimeout:       90 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 	}
+	MaxGetSize         = 1024
 	InactivePurge      = time.Minute
 	ClientReadTimeout  = time.Second * 15
 	MaxWriteBufferSize = 1024 * 1024 * 2
@@ -32,11 +36,6 @@ var (
 	OnRequestServer    = func() *http.Transport { return DefaultTransport }
 
 	globalConnCounter uint32 = 0
-)
-
-const (
-	hIfMatch = "If-Match"
-	hETah    = "ETag"
 )
 
 type ClientConn struct {
@@ -61,7 +60,7 @@ type ClientConn struct {
 
 func Dial(network string, address string) (net.Conn, error) {
 	blk, _ := aes.NewCipher([]byte(network + "0123456789abcdef")[:16])
-	c, err := newClientConn("http://"+address, blk)
+	c, err := newClientConn("http://"+address+"/", blk)
 	if err != nil {
 		return nil, err
 	}
@@ -77,18 +76,18 @@ func newClientConn(endpoint string, blk cipher.Block) (*ClientConn, error) {
 	c.read = newReadConn(c.idx, blk, 'c')
 
 	// Say hello
-	client := &http.Client{Transport: DefaultTransport}
-	f := frame{connIdx: c.idx, options: optHello, data: []byte{}}
-	req, _ := http.NewRequest("POST", c.endpoint, f.marshal(c.read.blk))
-	req.Header.Add(hIfMatch, connIdxToString(c.read.blk, c.idx))
-	resp, err := client.Do(req)
+	resp, err := c.send(frame{
+		idx:     rand.Uint64(),
+		connIdx: c.idx,
+		options: optSyncConnIdx,
+		next: &frame{
+			connIdx: c.idx,
+			options: optHello,
+		}})
 	if err != nil {
 		return nil, err
 	}
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("remote is unavailable: %s", resp.Status)
-	}
 
 	go c.respLoop()
 	go c.respLoop()
@@ -182,42 +181,26 @@ func (c *ClientConn) sendWriteBuf() {
 	}
 
 	f := frame{
-		idx:     c.write.counter + 1,
+		idx:     rand.Uint64(),
 		connIdx: c.idx,
-		data:    c.write.buf,
+		options: optSyncConnIdx,
+		next: &frame{
+			idx:     c.write.counter + 1,
+			connIdx: c.idx,
+			data:    c.write.buf,
+		},
 	}
 
 	deadline := time.Now().Add(InactivePurge - time.Second)
-	send := func() (*http.Response, error) {
-		client := &http.Client{
-			Timeout:   time.Second * 5,
-			Transport: OnRequestServer(),
-		}
-
-		req, _ := http.NewRequest("POST", c.endpoint, f.marshal(c.read.blk))
-		req.Header.Add(hIfMatch, connIdxToString(c.read.blk, c.idx))
-		resp, err := client.Do(req)
-		if err != nil {
-			return nil, err
-		}
-
-		if resp.StatusCode != http.StatusOK {
-			resp.Body.Close()
-			return nil, fmt.Errorf("remote is unavailable: %s", resp.Status)
-		}
-
-		c.write.buf = c.write.buf[:0]
-		c.write.counter++
-		return resp, nil
-	}
-
 	for {
-		if resp, err := send(); err != nil {
+		if resp, err := c.send(f); err != nil {
 			if time.Now().After(deadline) {
 				c.read.feedError(err)
 				return
 			}
 		} else {
+			c.write.buf = c.write.buf[:0]
+			c.write.counter++
 			func() {
 				defer func() { recover() }()
 				c.write.respCh <- resp.Body
@@ -225,6 +208,33 @@ func (c *ClientConn) sendWriteBuf() {
 			break
 		}
 	}
+}
+
+func (c *ClientConn) send(f frame) (resp *http.Response, err error) {
+	client := &http.Client{
+		Timeout:   time.Second * 5,
+		Transport: OnRequestServer(),
+	}
+
+	if f.size() > MaxGetSize {
+		req, _ := http.NewRequest("POST", c.endpoint, f.marshal(c.read.blk))
+		resp, err = client.Do(req)
+	} else {
+		url := &bytes.Buffer{}
+		url.WriteString(c.endpoint)
+		enc := base64.NewEncoder(base64.URLEncoding, url)
+		io.Copy(enc, f.marshal(c.read.blk))
+		enc.Close() // flush padding
+		resp, err = client.Get(url.String())
+	}
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		return nil, fmt.Errorf("remote is unavailable: %s", resp.Status)
+	}
+	return resp, nil
 }
 
 func (c *ClientConn) respLoop() {

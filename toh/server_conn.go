@@ -3,11 +3,14 @@ package toh
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"encoding/base64"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"math/rand"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -119,11 +122,17 @@ func (l *Listener) randomReply(w http.ResponseWriter) {
 }
 
 func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
-	connIdx, ok := stringToConnIdx(l.blk, r.Header.Get(hIfMatch))
-	if !ok {
+	if r.Method == "GET" && len(r.URL.Path) > 0 {
+		r.Body.Close()
+		r.Body = ioutil.NopCloser(base64.NewDecoder(base64.URLEncoding, strings.NewReader(r.URL.Path[1:])))
+	}
+
+	hdr, ok := parseframe(r.Body, l.blk)
+	if !ok || hdr.options != optSyncConnIdx {
 		l.randomReply(w)
 		return
 	}
+	connIdx := hdr.connIdx
 
 	var conn *ServerConn
 	l.connsmu.Lock()
@@ -138,6 +147,7 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 			l.connsmu.Unlock()
 			return
 		}
+		vprint("ok")
 
 		conn = newServerConn(connIdx, l)
 		l.conns[connIdx] = conn

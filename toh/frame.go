@@ -12,6 +12,7 @@ import (
 
 const (
 	optSyncCtr = 1 << iota
+	optSyncConnIdx
 	optHello
 )
 
@@ -46,6 +47,10 @@ func (f *frame) marshal(blk cipher.Block) io.Reader {
 	binary.BigEndian.PutUint64(buf[:8], f.idx)
 	binary.BigEndian.PutUint32(buf[8:12], f.connIdx)
 
+	if len(f.data) == 0 {
+		f.data = make([]byte, 0, 16)
+	}
+
 	gcm, _ := cipher.NewGCM(blk)
 	f.data = gcm.Seal(f.data[:0], buf[:12], f.data, nil)
 	binary.LittleEndian.PutUint32(buf[12:], uint32(len(f.data))&0xffffff)
@@ -57,6 +62,13 @@ func (f *frame) marshal(blk cipher.Block) io.Reader {
 		return io.MultiReader(bytes.NewReader(buf[:]), bytes.NewReader(f.data))
 	}
 	return io.MultiReader(bytes.NewReader(buf[:]), bytes.NewReader(f.data), f.next.marshal(blk))
+}
+
+func (f *frame) size() int {
+	if f.next == nil {
+		return 16 + len(f.data)
+	}
+	return 16 + len(f.data) + f.next.size()
 }
 
 func parseframe(r io.Reader, blk cipher.Block) (f frame, ok bool) {
