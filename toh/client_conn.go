@@ -216,7 +216,7 @@ func (c *ClientConn) send(f frame) (resp *http.Response, err error) {
 		Transport: OnRequestServer(),
 	}
 
-	if f.size() > MaxGetSize {
+	if f.size() >= MaxGetSize {
 		req, _ := http.NewRequest("POST", c.endpoint, f.marshal(c.read.blk))
 		resp, err = client.Do(req)
 	} else {
