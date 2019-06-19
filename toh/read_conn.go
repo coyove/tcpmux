@@ -45,7 +45,7 @@ func newReadConn(idx uint32, blk cipher.Block, tag byte) *readConn {
 	return r
 }
 
-func (c *readConn) feedframes(r io.Reader) (datalen int, err error) {
+func (c *readConn) feedframes(r io.ReadCloser) (datalen int, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			// Dirty way to avoid closed channel panic

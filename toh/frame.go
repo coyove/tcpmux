@@ -8,6 +8,9 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"time"
+
+	"github.com/coyove/common/sched"
 )
 
 const (
@@ -71,7 +74,13 @@ func (f *frame) size() int {
 	return 16 + len(f.data) + f.next.size()
 }
 
-func parseframe(r io.Reader, blk cipher.Block) (f frame, ok bool) {
+func parseframe(r io.ReadCloser, blk cipher.Block) (f frame, ok bool) {
+	k := sched.ScheduleSync(func() {
+		vprint("parseframe, waiting too long")
+		r.Close()
+	}, time.Now().Add(InactivePurge/2))
+	defer k.Cancel()
+
 	header := [16]byte{}
 	if n, err := io.ReadAtLeast(r, header[:], len(header)); err != nil || n != len(header) {
 		if err == io.EOF {
