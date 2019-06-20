@@ -147,7 +147,6 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 			l.connsmu.Unlock()
 			return
 		}
-		vprint("ok")
 
 		conn = newServerConn(connIdx, l)
 		l.conns[connIdx] = conn
@@ -172,34 +171,43 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 		conn.schedPurge.Reschedule(func() { conn.Close() }, time.Now().Add(InactivePurge))
 	}
 
-	conn.write.Lock()
-
-	deadline := time.Now().Add(InactivePurge - time.Second)
-	f := frame{
-		idx:     conn.write.counter + 1,
-		options: optSyncCtr,
-		data:    []byte{},
-		next: &frame{
-			idx:     conn.write.counter + 1,
-			connIdx: conn.idx,
-			data:    conn.write.buf,
-		},
-	}
-
-AGAIN:
-	if _, err := io.Copy(w, f.marshal(conn.read.blk)); err != nil {
-		if time.Now().Before(deadline) {
-			goto AGAIN
+	for i := 0; ; i++ {
+		conn.write.Lock()
+		if len(conn.write.buf) == 0 {
+			conn.write.Unlock()
+			return
 		}
-		vprint("failed to response to client, error: ", err)
-		conn.read.feedError(err)
-		conn.Close()
-	} else {
+
+		if i > 0 {
+			vprint("being continued")
+		}
+
+		f := frame{
+			idx:     conn.write.counter + 1,
+			options: optSyncCtr,
+			next: &frame{
+				idx:     conn.write.counter + 1,
+				connIdx: conn.idx,
+				data:    make([]byte, len(conn.write.buf)),
+			},
+		}
+
+		copy(f.next.data, conn.write.buf)
 		conn.write.buf = conn.write.buf[:0]
 		conn.write.counter++
-	}
+		conn.write.Unlock()
 
-	conn.write.Unlock()
+		deadline := time.Now().Add(InactivePurge - time.Second)
+	AGAIN:
+		if _, err := io.Copy(w, f.marshal(conn.read.blk)); err != nil {
+			if time.Now().Before(deadline) {
+				goto AGAIN
+			}
+			vprint("failed to response to client, error: ", err)
+			conn.read.feedError(err)
+			conn.Close()
+		}
+	}
 }
 
 func (c *ServerConn) SetReadDeadline(t time.Time) error {
