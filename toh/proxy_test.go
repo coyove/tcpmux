@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/miekg/dns"
 )
 
 func iocopy(dst io.Writer, src io.Reader) (written int64, err error) {
@@ -53,6 +55,8 @@ func (s *client) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !strings.Contains(host, ":") {
 		host += ":80"
 	}
+
+	vprint(dnsIterQuery(host))
 
 	up, _ := Dial("tcp", ":10001")
 	up.Write([]byte(r.Method[:1] + host + "\n"))
@@ -98,7 +102,6 @@ func foo(conn net.Conn) {
 }
 
 func TestProxy(t *testing.T) {
-
 	go func() {
 		for {
 			time.Sleep(2 * time.Second)
@@ -126,4 +129,39 @@ func TestProxy(t *testing.T) {
 
 	//	Verbose = false
 	select {}
+}
+
+func dnsIterQuery(host string) net.IP {
+	if idx := strings.LastIndex(host, ":"); idx > -1 {
+		host = host[:idx]
+	}
+	if !strings.HasSuffix(host, ".") {
+		host += "."
+	}
+
+	c := new(dns.Client)
+	m1 := &dns.Msg{}
+	m1.Id = dns.Id()
+	m1.RecursionDesired = false
+	m1.Question = []dns.Question{dns.Question{host, dns.TypeA, dns.ClassINET}}
+
+	retries := 0
+RETRY:
+	in, _, err := c.Exchange(m1, "10.93.192.1:53")
+	if err != nil || len(in.Answer) == 0 {
+		vprint(err)
+		if retries++; retries < 3 {
+			goto RETRY
+		}
+		return net.IPv4zero
+	}
+
+	switch a := in.Answer[0].(type) {
+	case *dns.A:
+		return a.A
+	case *dns.CNAME:
+		return dnsIterQuery(a.Target)
+	default:
+		return net.IPv4zero
+	}
 }
