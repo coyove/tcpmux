@@ -73,6 +73,8 @@ func (c *readConn) feedframes(r io.ReadCloser) (datalen int, err error) {
 			err = fmt.Errorf("un-synced counter")
 			c.feedError(err)
 			return 0, err
+		} else {
+			expectedCtr = 0
 		}
 		if c.closed {
 			return 0, ErrClosedConn
@@ -82,6 +84,15 @@ func (c *readConn) feedframes(r io.ReadCloser) (datalen int, err error) {
 		}
 		if f.options&optSyncCtr > 0 {
 			expectedCtr = f.idx
+			continue
+		}
+		if f.options&optNotifyRead > 0 {
+			globalClientConns.Lock()
+			if c := globalClientConns.m[f.connIdx]; c != nil {
+				vprint("notifyRead triggered schedSending")
+				go c.schedSending()
+			}
+			globalClientConns.Unlock()
 			continue
 		}
 

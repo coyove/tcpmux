@@ -1,6 +1,7 @@
 package toh
 
 import (
+	"container/list"
 	"crypto/aes"
 	"crypto/cipher"
 	"encoding/base64"
@@ -25,8 +26,9 @@ type ServerConn struct {
 
 	write struct {
 		sync.Mutex
-		buf     []byte
-		counter uint64
+		buf      []byte
+		counter  uint64
+		lasttime time.Time
 	}
 
 	read *readConn
@@ -35,7 +37,8 @@ type ServerConn struct {
 type Listener struct {
 	ln           net.Listener
 	closed       bool
-	conns        map[uint32]*ServerConn
+	conns        map[uint32]*list.Element
+	connslist    *list.List
 	connsmu      sync.Mutex
 	httpServeErr chan error
 	pendingConns chan *ServerConn
@@ -75,7 +78,8 @@ func Listen(network string, address string) (net.Listener, error) {
 		ln:           ln,
 		httpServeErr: make(chan error, 1),
 		pendingConns: make(chan *ServerConn, 1024),
-		conns:        map[uint32]*ServerConn{},
+		conns:        map[uint32]*list.Element{},
+		connslist:    list.New(),
 	}
 
 	l.blk, _ = aes.NewCipher([]byte(network + "0123456789abcdef")[:16])
@@ -92,10 +96,11 @@ func Listen(network string, address string) (net.Listener, error) {
 				ln := 0
 				l.connsmu.Lock()
 				for _, conn := range l.conns {
-					ln += len(conn.write.buf)
+					ln += len(conn.Value.(*ServerConn).write.buf)
 				}
 				l.connsmu.Unlock()
 				vprint("listener active connections: ", len(l.conns), ", pending bytes: ", ln)
+				vprint("global client connections: ", len(globalClientConns.m))
 			}
 		}()
 	}
@@ -136,11 +141,14 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 
 	var conn *ServerConn
 	l.connsmu.Lock()
-	if sc, _ := l.conns[connIdx]; sc != nil {
-		conn = sc
+	if sc := l.conns[connIdx]; sc != nil {
+		// Existing connection, since we are going to write it to client
+		// move it to the back of the writing queue (lowest writing priority)
+		conn = sc.Value.(*ServerConn)
+		l.connslist.MoveToBack(sc)
 		l.connsmu.Unlock()
 	} else {
-		// New incoming connection?
+		// New incoming connection
 		f, ok := parseframe(r.Body, l.blk)
 		if !ok || f.options&optHello == 0 || f.connIdx != connIdx {
 			l.randomReply(w)
@@ -149,8 +157,9 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		conn = newServerConn(connIdx, l)
-		l.conns[connIdx] = conn
+		l.conns[connIdx] = l.connslist.PushFront(conn)
 		l.pendingConns <- conn
+
 		vprint("server: new conn: ", conn)
 		l.connsmu.Unlock()
 		return
@@ -175,6 +184,28 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 		conn.write.Lock()
 		if len(conn.write.buf) == 0 {
 			conn.write.Unlock()
+
+			var f *frame
+			var count = 0
+			l.connsmu.Lock()
+			for elem := l.connslist.Front(); elem != l.connslist.Back() && elem != nil; elem = elem.Next() {
+				if c := elem.Value.(*ServerConn); len(c.write.buf) > 0 {
+					if f == nil {
+						f = &frame{connIdx: c.idx, options: optNotifyRead}
+					} else {
+						f.next = &frame{connIdx: c.idx, options: optNotifyRead}
+						f = f.next
+					}
+				}
+				if count++; count > 64 {
+					break
+				}
+			}
+			l.connsmu.Unlock()
+
+			if f != nil {
+				io.Copy(w, f.marshal(conn.read.blk))
+			}
 			return
 		}
 
@@ -241,6 +272,11 @@ func (c *ServerConn) Write(p []byte) (n int, err error) {
 	c.write.Lock()
 	c.write.buf = append(c.write.buf, p...)
 	c.write.Unlock()
+
+	c.rev.connsmu.Lock()
+	c.rev.connslist.MoveToFront(c.rev.conns[c.idx])
+	c.rev.connsmu.Unlock()
+
 	return len(p), nil
 }
 
@@ -252,7 +288,9 @@ func (c *ServerConn) Close() error {
 	vprint("server: close conn: ", c)
 	c.schedPurge.Cancel()
 	c.read.close()
+
 	c.rev.connsmu.Lock()
+	c.rev.connslist.Remove(c.rev.conns[c.idx])
 	delete(c.rev.conns, c.idx)
 	c.rev.connsmu.Unlock()
 	//vprint(c, " delete", c.rev.conns)

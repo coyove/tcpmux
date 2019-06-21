@@ -36,6 +36,10 @@ var (
 	OnRequestServer    = func() *http.Transport { return DefaultTransport }
 
 	globalConnCounter uint32 = 0
+	globalClientConns        = struct {
+		sync.Mutex
+		m map[uint32]*ClientConn
+	}{m: map[uint32]*ClientConn{}}
 )
 
 type ClientConn struct {
@@ -44,10 +48,11 @@ type ClientConn struct {
 
 	write struct {
 		sync.Mutex
-		counter uint64
-		sched   sched.SchedKey
-		buf     []byte
-		survey  struct {
+		counter       uint64
+		sched         sched.SchedKey
+		schedInterval time.Duration
+		buf           []byte
+		survey        struct {
 			pendingSize  int
 			reschedCount int64
 		}
@@ -71,6 +76,7 @@ func newClientConn(endpoint string, blk cipher.Block) (*ClientConn, error) {
 	c := &ClientConn{endpoint: endpoint}
 	c.idx = atomic.AddUint32(&globalConnCounter, 1)
 	c.write.sched = sched.Schedule(c.schedSending, time.Now().Add(time.Second))
+	c.write.schedInterval = time.Second
 	c.write.survey.pendingSize = 1
 	c.write.respCh = make(chan io.ReadCloser, 16)
 	c.read = newReadConn(c.idx, blk, 'c')
@@ -91,6 +97,10 @@ func newClientConn(endpoint string, blk cipher.Block) (*ClientConn, error) {
 
 	go c.respLoop()
 	go c.respLoop()
+
+	globalClientConns.Lock()
+	globalClientConns.m[c.idx] = c
+	globalClientConns.Unlock()
 	return c, nil
 }
 
@@ -120,6 +130,11 @@ func (c *ClientConn) Close() error {
 	c.write.sched.Cancel()
 	c.read.close()
 	c.write.respChOnce.Do(func() { close(c.write.respCh) })
+
+	globalClientConns.Lock()
+	delete(globalClientConns.m, c.idx)
+	globalClientConns.Unlock()
+
 	return nil
 }
 
@@ -137,10 +152,11 @@ func (c *ClientConn) Write(p []byte) (n int, err error) {
 	}
 
 	c.write.Lock()
+	c.write.schedInterval = time.Second
 	c.write.sched.Reschedule(func() {
 		c.write.survey.pendingSize = 1
 		c.schedSending()
-	}, time.Now().Add(time.Second))
+	}, time.Now().Add(c.write.schedInterval))
 	c.write.buf = append(c.write.buf, p...)
 	c.write.Unlock()
 
@@ -165,7 +181,7 @@ func (c *ClientConn) schedSending() {
 	c.write.sched = sched.Schedule(func() {
 		c.write.survey.pendingSize = 1
 		c.schedSending()
-	}, time.Now().Add(time.Second))
+	}, time.Now().Add(c.write.schedInterval))
 }
 
 func (c *ClientConn) sendWriteBuf() {
@@ -246,7 +262,12 @@ func (c *ClientConn) respLoop() {
 			}
 
 			k := sched.ScheduleSync(func() { body.Close() }, time.Now().Add(ClientReadTimeout))
-			c.read.feedframes(body)
+			n, _ := c.read.feedframes(body)
+			if n == 0 {
+				c.write.Lock()
+				c.write.schedInterval += time.Duration(rand.Intn(3)) * time.Second
+				c.write.Unlock()
+			}
 			k.Cancel()
 			body.Close()
 		}

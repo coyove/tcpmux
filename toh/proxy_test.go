@@ -56,7 +56,7 @@ func (s *client) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		host += ":80"
 	}
 
-	vprint(dnsIterQuery(host))
+	//vprint(dnsIterQuery(host))
 
 	up, _ := Dial("tcp", ":10001")
 	up.Write([]byte(r.Method[:1] + host + "\n"))
