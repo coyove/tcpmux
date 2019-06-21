@@ -38,6 +38,11 @@ var (
 	globalConnCounter uint32 = 0
 )
 
+type respNode struct {
+	r io.ReadCloser
+	f frame
+}
+
 type ClientConn struct {
 	idx      uint32
 	endpoint string
@@ -51,7 +56,7 @@ type ClientConn struct {
 			pendingSize  int
 			reschedCount int64
 		}
-		respCh     chan io.ReadCloser
+		respCh     chan respNode
 		respChOnce sync.Once
 	}
 
@@ -70,9 +75,8 @@ func Dial(network string, address string) (net.Conn, error) {
 func newClientConn(endpoint string, blk cipher.Block) (*ClientConn, error) {
 	c := &ClientConn{endpoint: endpoint}
 	c.idx = atomic.AddUint32(&globalConnCounter, 1)
-	c.write.sched = sched.Schedule(c.schedSending, time.Now().Add(time.Second))
 	c.write.survey.pendingSize = 1
-	c.write.respCh = make(chan io.ReadCloser, 16)
+	c.write.respCh = make(chan respNode, 16)
 	c.read = newReadConn(c.idx, blk, 'c')
 
 	// Say hello
@@ -88,6 +92,8 @@ func newClientConn(endpoint string, blk cipher.Block) (*ClientConn, error) {
 		return nil, err
 	}
 	resp.Body.Close()
+
+	c.write.sched = sched.ScheduleSync(c.schedSending, time.Now().Add(time.Second))
 
 	go c.respLoop()
 	go c.respLoop()
@@ -117,6 +123,7 @@ func (c *ClientConn) RemoteAddr() net.Addr {
 }
 
 func (c *ClientConn) Close() error {
+	vprint(c, " closing")
 	c.write.sched.Cancel()
 	c.read.close()
 	c.write.respChOnce.Do(func() { close(c.write.respCh) })
@@ -137,7 +144,7 @@ func (c *ClientConn) Write(p []byte) (n int, err error) {
 	}
 
 	c.write.Lock()
-	c.write.sched.Reschedule(func() {
+	c.write.sched.RescheduleSync(func() {
 		c.write.survey.pendingSize = 1
 		c.schedSending()
 	}, time.Now().Add(time.Second))
@@ -156,13 +163,12 @@ func (c *ClientConn) schedSending() {
 	atomic.AddInt64(&c.write.survey.reschedCount, 1)
 
 	if c.read.err != nil || c.read.closed {
-		vprint(c, " schedSending out")
 		c.Close()
 		return
 	}
 
-	c.sendWriteBuf()
-	c.write.sched = sched.Schedule(func() {
+	orchSendWriteBuf(c)
+	c.write.sched = sched.ScheduleSync(func() {
 		c.write.survey.pendingSize = 1
 		c.schedSending()
 	}, time.Now().Add(time.Second))
@@ -203,7 +209,7 @@ func (c *ClientConn) sendWriteBuf() {
 			c.write.counter++
 			func() {
 				defer func() { recover() }()
-				c.write.respCh <- resp.Body
+				c.write.respCh <- respNode{r: resp.Body}
 			}()
 			break
 		}
@@ -244,11 +250,16 @@ func (c *ClientConn) respLoop() {
 			if !ok {
 				return
 			}
-
-			k := sched.ScheduleSync(func() { body.Close() }, time.Now().Add(ClientReadTimeout))
-			c.read.feedframes(body)
-			k.Cancel()
-			body.Close()
+			if body.r != nil {
+				k := sched.ScheduleSync(func() { body.r.Close() }, time.Now().Add(ClientReadTimeout))
+				c.read.feedframes(body.r)
+				k.Cancel()
+				body.r.Close()
+			} else {
+				if c.read.err == nil && !c.read.closed {
+					c.read.frames <- body.f
+				}
+			}
 		}
 	}
 }

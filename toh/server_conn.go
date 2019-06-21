@@ -1,9 +1,11 @@
 package toh
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -93,6 +95,7 @@ func Listen(network string, address string) (net.Listener, error) {
 				l.connsmu.Lock()
 				for _, conn := range l.conns {
 					ln += len(conn.write.buf)
+					//vprint(conn, len(conn.write.buf))
 				}
 				l.connsmu.Unlock()
 				vprint("listener active connections: ", len(l.conns), ", pending bytes: ", ln)
@@ -128,7 +131,26 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	hdr, ok := parseframe(r.Body, l.blk)
-	if !ok || hdr.options != optSyncConnIdx {
+	if !ok {
+		l.randomReply(w)
+		return
+	}
+
+	switch hdr.options {
+	case optSyncConnIdx:
+	case optPing:
+		l.connsmu.Lock()
+		p := bytes.Buffer{}
+		for i := 0; i < len(hdr.data); i += 4 {
+			connIdx := binary.BigEndian.Uint32(hdr.data[i : i+4])
+			if c := l.conns[connIdx]; c != nil {
+				c.writeTo(&p, false)
+			}
+		}
+		l.connsmu.Unlock()
+		w.Write(p.Bytes())
+		return
+	default:
 		l.randomReply(w)
 		return
 	}
@@ -171,6 +193,11 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 		conn.schedPurge.Reschedule(func() { conn.Close() }, time.Now().Add(InactivePurge))
 	}
 
+	conn.writeTo(w, true)
+}
+
+func (conn *ServerConn) writeTo(w io.Writer, syncFirst bool) {
+
 	for i := 0; ; i++ {
 		conn.write.Lock()
 		if len(conn.write.buf) == 0 {
@@ -178,11 +205,7 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if i > 0 {
-			vprint("being continued")
-		}
-
-		f := frame{
+		f := &frame{
 			idx:     conn.write.counter + 1,
 			options: optSyncCtr,
 			next: &frame{
@@ -197,6 +220,10 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 		conn.write.counter++
 		conn.write.Unlock()
 
+		if !syncFirst {
+			f = f.next
+		}
+
 		deadline := time.Now().Add(InactivePurge - time.Second)
 	AGAIN:
 		if _, err := io.Copy(w, f.marshal(conn.read.blk)); err != nil {
@@ -206,6 +233,7 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 			vprint("failed to response to client, error: ", err)
 			conn.read.feedError(err)
 			conn.Close()
+			return
 		}
 	}
 }

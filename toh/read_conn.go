@@ -73,6 +73,8 @@ func (c *readConn) feedframes(r io.ReadCloser) (datalen int, err error) {
 			err = fmt.Errorf("un-synced counter")
 			c.feedError(err)
 			return 0, err
+		} else {
+			expectedCtr = 0
 		}
 		if c.closed {
 			return 0, ErrClosedConn
