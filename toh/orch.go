@@ -4,13 +4,15 @@ import (
 	"bytes"
 	"encoding/binary"
 	"time"
+
+	"github.com/coyove/common/sched"
 )
 
 var orch chan *ClientConn
 
 func init() {
 	orch = make(chan *ClientConn, 256)
-	//sched.Verbose = false
+	sched.Verbose = false
 
 	go func() {
 		for {
@@ -55,22 +57,23 @@ func init() {
 			go func(pingframe frame, lastconn *ClientConn, conns map[uint32]*ClientConn) {
 				resp, err := lastconn.send(pingframe)
 				if err != nil {
+					vprint("orch: send error: ", err)
 					return
 				}
-				pcount := 0
+				pcount, psize := 0, 0
 				for {
 					f, ok := parseframe(resp.Body, lastconn.read.blk)
 					if !ok || f.idx == 0 {
 						break
 					}
-
-					if c := conns[f.connIdx]; c != nil {
+					psize += len(f.data)
+					if c := conns[f.connIdx]; c != nil && !c.read.closed && c.read.err == nil {
 						c.write.respCh <- respNode{f: f}
 						pcount++
 					}
 				}
 
-				vprint("orch: pings: ", len(pingframe.data)/4, ", positives: ", pcount, "+", count)
+				vprint("orch: pings: ", len(pingframe.data)/4, ", positives: ", pcount, "(", psize, "b)+", count)
 				resp.Body.Close()
 			}(pingframe, lastconn, conns)
 		}
