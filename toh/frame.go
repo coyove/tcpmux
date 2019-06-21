@@ -16,7 +16,6 @@ import (
 const (
 	optSyncCtr = 1 << iota
 	optSyncConnIdx
-	optNotifyRead
 	optHello
 )
 
