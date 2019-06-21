@@ -17,9 +17,12 @@ var (
 func debugprint(v ...interface{}) {
 	if !debug {
 		return
-	} else {
-		//		time.Sleep(time.Millisecond * 100)
-		//return
+	}
+
+	for i := 0; i < len(v); i++ {
+		if buf, _ := v[i].([]byte); buf != nil {
+			v[i] = string(buf)
+		}
 	}
 
 	src, i := bytes.Buffer{}, 1

@@ -46,18 +46,6 @@ func newReadConn(idx uint32, blk cipher.Block, tag byte) *readConn {
 }
 
 func (c *readConn) feedframes(r io.ReadCloser) (datalen int, err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			// Dirty way to avoid closed channel panic
-			if strings.Contains(fmt.Sprintf("%v", r), "send on close") {
-				datalen = 0
-				err = ErrClosedConn
-			} else {
-				panic(r)
-			}
-		}
-	}()
-
 	count, expectedCtr := 0, uint64(0)
 	for {
 		f, ok := parseframe(r, c.blk)
@@ -88,10 +76,27 @@ func (c *readConn) feedframes(r io.ReadCloser) (datalen int, err error) {
 		}
 
 		debugprint("feed: ", f.data)
-		c.frames <- f
+		if !c.feedframe(f) {
+			return 0, ErrClosedConn
+		}
 		count += len(f.data)
 	}
 	return count, nil
+}
+
+func (c *readConn) feedframe(f frame) (ok bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			// Dirty way to avoid closed channel panic
+			if strings.Contains(fmt.Sprintf("%v", r), "send on close") {
+				ok = false
+			} else {
+				panic(r)
+			}
+		}
+	}()
+	c.frames <- f
+	return true
 }
 
 func (c *readConn) feedError(err error) {

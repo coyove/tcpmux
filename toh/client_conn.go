@@ -168,7 +168,7 @@ func (c *ClientConn) schedSending() {
 	}
 
 	orchSendWriteBuf(c)
-	c.write.sched = sched.ScheduleSync(func() {
+	c.write.sched.RescheduleSync(func() {
 		c.write.survey.pendingSize = 1
 		c.schedSending()
 	}, time.Now().Add(time.Second))
@@ -257,10 +257,10 @@ func (c *ClientConn) respLoop() {
 				body.r.Close()
 			} else {
 				if c.read.err == nil && !c.read.closed {
-					c.read.frames <- body.f
+					c.read.feedframe(body.f)
 				}
 			}
-		}
+		} // end of select
 	}
 }
 

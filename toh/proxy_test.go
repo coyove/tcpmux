@@ -46,7 +46,9 @@ func iocopy(dst io.Writer, src io.Reader) (written int64, err error) {
 	return written, err
 }
 
-type client int
+type client struct {
+	upstream string
+}
 
 type server int
 
@@ -56,9 +58,7 @@ func (s *client) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		host += ":80"
 	}
 
-	//vprint(dnsIterQuery(host))
-
-	up, _ := Dial("tcp", ":10001")
+	up, _ := Dial("tcp", s.upstream)
 	up.Write([]byte(r.Method[:1] + host + "\n"))
 
 	down, _, _ := w.(http.Hijacker).Hijack()
@@ -118,7 +118,13 @@ func TestProxy(t *testing.T) {
 
 	go func() {
 		log.Println("hello")
-		go http.ListenAndServe(":10000", new(client))
+		up := os.Getenv("UP")
+		if up == "" {
+			up = ":10001"
+		}
+		go http.ListenAndServe(":10000", &client{
+			upstream: up,
+		})
 
 		ln, _ := Listen("tcp", ":10001")
 		for {
@@ -131,7 +137,7 @@ func TestProxy(t *testing.T) {
 	select {}
 }
 
-func dnsIterQuery(host string) net.IP {
+func dnsIterQueryLocal(host string) net.IP {
 	if idx := strings.LastIndex(host, ":"); idx > -1 {
 		host = host[:idx]
 	}
@@ -139,20 +145,15 @@ func dnsIterQuery(host string) net.IP {
 		host += "."
 	}
 
-	c := new(dns.Client)
-	m1 := &dns.Msg{}
-	m1.Id = dns.Id()
-	m1.RecursionDesired = false
-	m1.Question = []dns.Question{dns.Question{host, dns.TypeA, dns.ClassINET}}
+	c := &dns.Client{Timeout: time.Millisecond * 100}
+	m := &dns.Msg{}
+	m.Id = dns.Id()
+	m.RecursionDesired = false
+	m.Question = []dns.Question{dns.Question{host, dns.TypeA, dns.ClassINET}}
 
-	retries := 0
-RETRY:
-	in, _, err := c.Exchange(m1, "10.93.192.1:53")
+	in, _, err := c.Exchange(m, "10.93.192.1:53")
 	if err != nil || len(in.Answer) == 0 {
 		vprint(err)
-		if retries++; retries < 3 {
-			goto RETRY
-		}
 		return net.IPv4zero
 	}
 
@@ -160,7 +161,7 @@ RETRY:
 	case *dns.A:
 		return a.A
 	case *dns.CNAME:
-		return dnsIterQuery(a.Target)
+		return dnsIterQueryLocal(a.Target)
 	default:
 		return net.IPv4zero
 	}
