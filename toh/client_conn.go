@@ -1,10 +1,8 @@
 package toh
 
 import (
-	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
-	"encoding/base64"
 	"fmt"
 	"io"
 	"math/rand"
@@ -28,10 +26,9 @@ var (
 		IdleConnTimeout:       90 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 	}
-	MaxGetSize         = 1024
 	InactivePurge      = time.Minute
 	ClientReadTimeout  = time.Second * 15
-	MaxWriteBufferSize = 1024 * 1024 * 2
+	MaxWriteBufferSize = 1024 * 1024 * 4
 	ErrBigWriteBuf     = fmt.Errorf("writer size exceeds limit, reader may be dead")
 	OnRequestServer    = func() *http.Transport { return DefaultTransport }
 
@@ -126,11 +123,18 @@ func (c *ClientConn) Close() error {
 	vprint(c, " closing")
 	c.write.sched.Cancel()
 	c.read.close()
-	c.write.respChOnce.Do(func() { close(c.write.respCh) })
+	c.write.respChOnce.Do(func() {
+		close(c.write.respCh)
+		go c.send(frame{
+			connIdx: c.idx,
+			options: optClosed,
+		})
+	})
 	return nil
 }
 
 func (c *ClientConn) Write(p []byte) (n int, err error) {
+REWRITE:
 	if c.read.err != nil {
 		return 0, c.read.err
 	}
@@ -140,7 +144,9 @@ func (c *ClientConn) Write(p []byte) (n int, err error) {
 	}
 
 	if len(c.write.buf) > MaxWriteBufferSize {
-		return 0, ErrBigWriteBuf
+		vprint("write buffer is full")
+		time.Sleep(time.Second)
+		goto REWRITE
 	}
 
 	c.write.Lock()
@@ -222,17 +228,8 @@ func (c *ClientConn) send(f frame) (resp *http.Response, err error) {
 		Transport: OnRequestServer(),
 	}
 
-	if f.size() >= MaxGetSize {
-		req, _ := http.NewRequest("POST", c.endpoint, f.marshal(c.read.blk))
-		resp, err = client.Do(req)
-	} else {
-		url := &bytes.Buffer{}
-		url.WriteString(c.endpoint)
-		enc := base64.NewEncoder(base64.URLEncoding, url)
-		io.Copy(enc, f.marshal(c.read.blk))
-		enc.Close() // flush padding
-		resp, err = client.Get(url.String())
-	}
+	req, _ := http.NewRequest("POST", c.endpoint, f.marshal(c.read.blk))
+	resp, err = client.Do(req)
 	if err != nil {
 		return nil, err
 	}

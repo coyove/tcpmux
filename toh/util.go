@@ -51,9 +51,9 @@ func vprint(v ...interface{}) {
 
 var countermark uint32
 
-func newConnectionIdx() [10]byte {
+func newConnectionIdx() uint64 {
 	// 25bit timestamp (1 yr) | 16bit counter | 23bit random values
 	now := uint32(time.Now().Unix())
 	c := atomic.AddUint32(&countermark, 1)
-	return uint64(now)<<39 | uint64(c&0xffff)<<23 | uint64(rand.Uint32()&0xffffff)
+	return uint64(now)<<39 | uint64(c&0xffff)<<23 | uint64(rand.Uint32()&0x7fffff)
 }

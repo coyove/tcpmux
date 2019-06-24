@@ -3,6 +3,7 @@ package toh
 import (
 	"bufio"
 	"io"
+	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -22,7 +23,6 @@ func iocopy(dst io.Writer, src io.Reader) (written int64, err error) {
 	for {
 		nr, er := src.Read(buf)
 		if nr > 0 {
-			//	vprint(string(buf[:1024]))
 			nw, ew := dst.Write(buf[0:nr])
 			if nw > 0 {
 				written += int64(nw)
@@ -44,6 +44,11 @@ func iocopy(dst io.Writer, src io.Reader) (written int64, err error) {
 		}
 	}
 	return written, err
+}
+
+func bridge(a, b io.ReadWriteCloser) {
+	go func() { iocopy(a, b); a.Close(); b.Close() }()
+	go func() { iocopy(b, a); a.Close(); b.Close() }()
 }
 
 type client struct {
@@ -69,8 +74,7 @@ func (s *client) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		io.Copy(up, r.Body)
 	}
 
-	go func() { io.Copy(up, down) }()
-	go func() { iocopy(down, up) }()
+	bridge(down, up)
 }
 
 func foo(conn net.Conn) {
@@ -97,8 +101,12 @@ func foo(conn net.Conn) {
 		conn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
 	}
 
-	go func() { io.Copy(up, down) }()
-	go func() { io.Copy(conn, up) }()
+	dd := &struct {
+		io.ReadCloser
+		io.Writer
+	}{ioutil.NopCloser(down), conn}
+
+	bridge(dd, up)
 }
 
 func TestProxy(t *testing.T) {
@@ -107,7 +115,7 @@ func TestProxy(t *testing.T) {
 			time.Sleep(2 * time.Second)
 			f, _ := os.Create("heap.txt")
 			pprof.Lookup("goroutine").WriteTo(f, 1)
-			//fmt.Println("profile")
+			f.Close()
 		}
 	}()
 

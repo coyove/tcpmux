@@ -15,6 +15,7 @@ const (
 	optSyncConnIdx = 1 << iota
 	optHello
 	optPing
+	optClosed
 )
 
 type frame struct {

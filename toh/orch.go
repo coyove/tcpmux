@@ -3,6 +3,7 @@ package toh
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"time"
 
 	"github.com/coyove/common/sched"
@@ -68,6 +69,12 @@ func init() {
 					}
 					psize += len(f.data)
 					if c := conns[f.connIdx]; c != nil && !c.read.closed && c.read.err == nil {
+						if f.options == optClosed {
+							vprint(c, " the other side is closed")
+							c.read.feedError(fmt.Errorf("use if closed connection"))
+							c.Close()
+							continue
+						}
 						c.write.respCh <- respNode{f: f}
 						pcount++
 					}

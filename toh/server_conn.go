@@ -4,15 +4,12 @@ import (
 	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
-	"encoding/base64"
 	"encoding/binary"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"math/rand"
 	"net"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -125,11 +122,6 @@ func (l *Listener) randomReply(w http.ResponseWriter) {
 }
 
 func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
-	if r.Method == "GET" && len(r.URL.Path) > 0 {
-		r.Body.Close()
-		r.Body = ioutil.NopCloser(base64.NewDecoder(base64.URLEncoding, strings.NewReader(r.URL.Path[1:])))
-	}
-
 	hdr, ok := parseframe(r.Body, l.blk)
 	if !ok {
 		l.randomReply(w)
@@ -138,17 +130,46 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 
 	switch hdr.options {
 	case optSyncConnIdx:
+	case optClosed:
+		l.connsmu.Lock()
+		c := l.conns[hdr.connIdx]
+		l.connsmu.Unlock()
+		if c != nil {
+			vprint(c, " is closing because the other side has closed")
+			c.Close()
+		}
 	case optPing:
 		l.connsmu.Lock()
 		p := bytes.Buffer{}
+		conns := []*ServerConn{}
 		for i := 0; i < len(hdr.data); i += 4 {
 			connIdx := binary.BigEndian.Uint32(hdr.data[i : i+4])
-			if c := l.conns[connIdx]; c != nil {
+			if c := l.conns[connIdx]; c != nil && c.read.err == nil && !c.read.closed {
 				c.writeTo(&p)
+				conns = append(conns, c)
+				continue
 			}
+			f := frame{connIdx: connIdx, options: optClosed}
+			io.Copy(&p, f.marshal(l.blk))
 		}
 		l.connsmu.Unlock()
-		w.Write(p.Bytes())
+
+		for _, conn := range conns {
+			conn.reschedDeath()
+		}
+
+		var err error
+		for deadline := time.Now().Add(InactivePurge); time.Now().Before(deadline); {
+			if _, err = w.Write(p.Bytes()); err == nil {
+				return
+			}
+		}
+
+		vprint("ping batch write: ", err)
+		for _, conn := range conns {
+			conn.read.feedError(err)
+			conn.Close()
+		}
 		return
 	default:
 		l.randomReply(w)
@@ -172,9 +193,11 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 
 		conn = newServerConn(connIdx, l)
 		l.conns[connIdx] = conn
+		l.connsmu.Unlock()
+
 		l.pendingConns <- conn
 		vprint("server: new conn: ", conn)
-		l.connsmu.Unlock()
+		conn.reschedDeath()
 		return
 	}
 
@@ -190,10 +213,14 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 		// are meaningless
 		// So we won't reschedule its deadline: it will die as expected
 	} else {
-		conn.schedPurge.Reschedule(func() { conn.Close() }, time.Now().Add(InactivePurge))
+		conn.reschedDeath()
 	}
 
 	conn.writeTo(w)
+}
+
+func (conn *ServerConn) reschedDeath() {
+	conn.schedPurge.RescheduleSync(func() { conn.Close() }, time.Now().Add(InactivePurge))
 }
 
 func (conn *ServerConn) writeTo(w io.Writer) {
@@ -241,11 +268,11 @@ func (c *ServerConn) SetDeadline(t time.Time) error {
 }
 
 func (c *ServerConn) SetWriteDeadline(t time.Time) error {
-	// SeverConn can't support write deadline
 	return nil
 }
 
 func (c *ServerConn) Write(p []byte) (n int, err error) {
+REWRITE:
 	if c.read.closed {
 		return 0, ErrClosedConn
 	}
@@ -255,7 +282,9 @@ func (c *ServerConn) Write(p []byte) (n int, err error) {
 	}
 
 	if len(c.write.buf) > MaxWriteBufferSize {
-		return 0, ErrBigWriteBuf
+		vprint("write buffer is full")
+		time.Sleep(time.Second)
+		goto REWRITE
 	}
 
 	c.write.Lock()
