@@ -3,6 +3,7 @@ package toh
 import (
 	"bytes"
 	"fmt"
+	"math/rand"
 	"path/filepath"
 	"runtime"
 	"sync/atomic"
@@ -48,10 +49,11 @@ func vprint(v ...interface{}) {
 	fmt.Println(fmt.Sprintf("%s %s:%d] ", time.Now().Format("Jan _2 15:04:05.000"), filepath.Base(fn), line), fmt.Sprint(v...))
 }
 
-func incrWriteFrameCounter(counter *uint64) uint64 {
-	x := atomic.AddUint64(counter, 1)
-	if x == 0 {
-		x = atomic.AddUint64(counter, 1)
-	}
-	return x
+var countermark uint32
+
+func newConnectionIdx() [10]byte {
+	// 25bit timestamp (1 yr) | 16bit counter | 23bit random values
+	now := uint32(time.Now().Unix())
+	c := atomic.AddUint32(&countermark, 1)
+	return uint64(now)<<39 | uint64(c&0xffff)<<23 | uint64(rand.Uint32()&0xffffff)
 }

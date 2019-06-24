@@ -3,9 +3,7 @@ package toh
 import (
 	"bytes"
 	"crypto/cipher"
-	"crypto/rand"
 	"encoding/binary"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"time"
@@ -14,8 +12,7 @@ import (
 )
 
 const (
-	optSyncCtr = 1 << iota
-	optSyncConnIdx
+	optSyncConnIdx = 1 << iota
 	optHello
 	optPing
 )
@@ -28,28 +25,11 @@ type frame struct {
 	next    *frame
 }
 
-func connIdxToString(blk cipher.Block, idx uint32) string {
-	p := [16]byte{}
-	binary.BigEndian.PutUint32(p[:], idx)
-	rand.Read(p[4:])
-	copy(p[12:], "toh.")
-	blk.Encrypt(p[:], p[:])
-	return hex.EncodeToString(p[:])
-}
-
-func stringToConnIdx(blk cipher.Block, v string) (uint32, bool) {
-	p, err := hex.DecodeString(v)
-	if err != nil || len(p) != 16 {
-		return 0, false
-	}
-	blk.Decrypt(p[:], p[:])
-	return binary.BigEndian.Uint32(p), string(p[12:]) == "toh."
-}
-
+// connection id 8b | data idx 4b | data length 3b | option 1b |
 func (f *frame) marshal(blk cipher.Block) io.Reader {
 	buf := [16]byte{}
 	binary.BigEndian.PutUint64(buf[:8], f.idx)
-	binary.BigEndian.PutUint32(buf[8:12], f.connIdx)
+	binary.BigEndian.PutUint32(buf[8:], f.connIdx)
 
 	if len(f.data) == 0 {
 		f.data = make([]byte, 0, 16)

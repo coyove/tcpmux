@@ -46,7 +46,7 @@ func newReadConn(idx uint32, blk cipher.Block, tag byte) *readConn {
 }
 
 func (c *readConn) feedframes(r io.ReadCloser) (datalen int, err error) {
-	count, expectedCtr := 0, uint64(0)
+	count := 0
 	for {
 		f, ok := parseframe(r, c.blk)
 		if !ok {
@@ -57,22 +57,11 @@ func (c *readConn) feedframes(r io.ReadCloser) (datalen int, err error) {
 		if f.idx == 0 {
 			break
 		}
-		if expectedCtr > 0 && f.idx != expectedCtr {
-			err = fmt.Errorf("un-synced counter")
-			c.feedError(err)
-			return 0, err
-		} else {
-			expectedCtr = 0
-		}
 		if c.closed {
 			return 0, ErrClosedConn
 		}
 		if c.err != nil {
 			return 0, c.err
-		}
-		if f.options&optSyncCtr > 0 {
-			expectedCtr = f.idx
-			continue
 		}
 
 		debugprint("feed: ", f.data)
