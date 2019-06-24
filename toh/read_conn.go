@@ -4,6 +4,8 @@ import (
 	"crypto/cipher"
 	"fmt"
 	"io"
+	"io/ioutil"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -18,28 +20,27 @@ var (
 
 type readConn struct {
 	sync.Mutex
-	counter      uint64             // counter, must be synced with the writer on the other side
+	idx          uint64             // readConn index, should be the same as the one in ClientConn/SerevrConn
 	buf          []byte             // read buffer
 	frames       chan frame         // incoming frames
-	futureframes map[uint64]frame   // future frames, which have arrived early
+	futureframes map[uint32]frame   // future frames, which have arrived early
 	futureSize   int                // total size of future frames
 	ready        *waitobject.Object // it being touched means that data in "buf" are ready
 	err          error              // stored error, if presented, all operations afterwards should return it
 	blk          cipher.Block       // cipher block, aes-128
 	closed       bool               // is readConn closed already
 	tag          byte               // tag, 'c' for readConn in ClientConn, 's' for readConn in ServerConn
-	idx          uint32             // readConn index, should be the same as the one in ClientConn/SerevrConn
+	counter      uint32             // counter, must be synced with the writer on the other side
 }
 
-func newReadConn(idx uint32, blk cipher.Block, tag byte) *readConn {
+func newReadConn(idx uint64, blk cipher.Block, tag byte) *readConn {
 	r := &readConn{
 		frames:       make(chan frame, 1024),
-		futureframes: map[uint64]frame{},
-		//sentframes:    lru.NewCache(WriteCacheSize),
-		idx:   idx,
-		tag:   tag,
-		blk:   blk,
-		ready: waitobject.New(),
+		futureframes: map[uint32]frame{},
+		idx:          idx,
+		tag:          tag,
+		blk:          blk,
+		ready:        waitobject.New(),
 	}
 	go r.readLoopRearrange()
 	return r
@@ -106,51 +107,70 @@ func (c *readConn) close() {
 }
 
 func (c *readConn) readLoopRearrange() {
-	for {
-		select {
-		//		case <-time.After(time.Second * 10):
-		//			vprint("timeout")
-		case f, ok := <-c.frames:
-			if !ok {
-				return
-			}
+LOOP:
+	select {
+	//		case <-time.After(time.Second * 10):
+	//			vprint("timeout")
+	case f, ok := <-c.frames:
+		if !ok {
+			return
+		}
 
-			c.Lock()
-			if f.connIdx != c.idx {
-				c.Unlock()
-				c.feedError(fmt.Errorf("fatal: unmatched stream index"))
-				return
-			}
+		c.Lock()
+		if f.connIdx != c.idx {
+			c.Unlock()
+			c.feedError(fmt.Errorf("fatal: unmatched stream index"))
+			return
+		}
 
-			if f.idx <= c.counter {
-				c.Unlock()
-				//c.feedError(fmt.Errorf("unmatched counter, maybe server GCed the connection"))
-				return
-			}
+		if f.idx <= c.counter {
+			c.Unlock()
+			//c.feedError(fmt.Errorf("unmatched counter, maybe server GCed the connection"))
+			return
+		}
 
-			c.futureframes[f.idx] = f
-			c.futureSize += len(f.data)
-			for {
-				idx := c.counter + 1
-				if f, ok := c.futureframes[idx]; ok {
-					c.buf = append(c.buf, f.data...)
-					c.counter = f.idx
-					delete(c.futureframes, f.idx)
-					c.futureSize -= len(f.data)
-				} else {
-					if c.futureSize > MaxWriteBufferSize {
+		c.futureframes[f.idx] = f
+		c.futureSize += len(f.data)
+		for {
+			idx := c.counter + 1
+			if f, ok := c.futureframes[idx]; ok {
+				if f.future {
+					buf, err := ioutil.ReadFile(frameTmpPath(c.idx, f.idx))
+					if err != nil {
 						c.Unlock()
-						c.feedError(fmt.Errorf("fatal: missing certain frame"))
-						vprint("missing: ", idx, ", futures: ", c.futureframes)
+						c.feedError(fmt.Errorf("fatal: missing certain frame from disk"))
 						return
 					}
-					break
+					os.Remove(frameTmpPath(c.idx, f.idx))
+					f.data = buf
+					vprint(c, " back load frame: ", f)
 				}
+
+				c.buf = append(c.buf, f.data...)
+				c.counter = f.idx
+				delete(c.futureframes, f.idx)
+				c.futureSize -= len(f.data)
+			} else {
+				if c.futureSize > 1024 {
+					if ioutil.WriteFile(frameTmpPath(c.idx, f.idx), f.data, 0755) != nil {
+						c.Unlock()
+						c.feedError(fmt.Errorf("fatal: missing certain frame"))
+						return
+					}
+
+					vprint(c, " tmp save frame: ", f)
+					c.futureframes[f.idx] = frame{future: true, idx: f.idx}
+				}
+				break
 			}
-			c.Unlock()
-			c.ready.Touch(dummyTouch)
 		}
+		if c.counter == 0xffffffff {
+			panic("surprise!")
+		}
+		c.Unlock()
+		c.ready.Touch(dummyTouch)
 	}
+	goto LOOP
 }
 
 func (c *readConn) Read(p []byte) (n int, err error) {
@@ -188,15 +208,3 @@ READ:
 
 	goto READ
 }
-
-func (c *readConn) String() string {
-	return fmt.Sprintf("<readConn_%d_%s_ctr_%d>", c.idx, string(c.tag), c.counter)
-}
-
-type timeoutError struct{}
-
-func (e *timeoutError) Error() string { return "operation timed out" }
-
-func (e *timeoutError) Timeout() bool { return true }
-
-func (e *timeoutError) Temporary() bool { return false }

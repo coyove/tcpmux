@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"math/rand"
+	"os"
 	"path/filepath"
 	"runtime"
 	"sync/atomic"
@@ -14,6 +15,24 @@ var (
 	debug   = false
 	Verbose = true
 )
+
+func (c *readConn) String() string {
+	return fmt.Sprintf("<readConn:%s,ctr:%d>", string(c.tag), c.counter)
+}
+
+type timeoutError struct{}
+
+func (e *timeoutError) Error() string {
+	return "operation timed out"
+}
+
+func (e *timeoutError) Timeout() bool {
+	return true
+}
+
+func (e *timeoutError) Temporary() bool {
+	return false
+}
 
 func debugprint(v ...interface{}) {
 	if !debug {
@@ -56,4 +75,8 @@ func newConnectionIdx() uint64 {
 	now := uint32(time.Now().Unix())
 	c := atomic.AddUint32(&countermark, 1)
 	return uint64(now)<<39 | uint64(c&0xffff)<<23 | uint64(rand.Uint32()&0x7fffff)
+}
+
+func frameTmpPath(connIdx uint64, idx uint32) string {
+	return filepath.Join(os.TempDir(), fmt.Sprintf("%x-%d.toh", connIdx, idx))
 }

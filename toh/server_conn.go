@@ -17,15 +17,14 @@ import (
 )
 
 type ServerConn struct {
-	idx        uint32
+	idx        uint64
 	rev        *Listener
-	counter    uint64
 	schedPurge sched.SchedKey
 
 	write struct {
 		sync.Mutex
 		buf     []byte
-		counter uint64
+		counter uint32
 	}
 
 	read *readConn
@@ -34,7 +33,7 @@ type ServerConn struct {
 type Listener struct {
 	ln           net.Listener
 	closed       bool
-	conns        map[uint32]*ServerConn
+	conns        map[uint64]*ServerConn
 	connsmu      sync.Mutex
 	httpServeErr chan error
 	pendingConns chan *ServerConn
@@ -74,7 +73,7 @@ func Listen(network string, address string) (net.Listener, error) {
 		ln:           ln,
 		httpServeErr: make(chan error, 1),
 		pendingConns: make(chan *ServerConn, 1024),
-		conns:        map[uint32]*ServerConn{},
+		conns:        map[uint64]*ServerConn{},
 	}
 
 	l.blk, _ = aes.NewCipher([]byte(network + "0123456789abcdef")[:16])
@@ -103,7 +102,7 @@ func Listen(network string, address string) (net.Listener, error) {
 	return l, nil
 }
 
-func newServerConn(idx uint32, ln *Listener) *ServerConn {
+func newServerConn(idx uint64, ln *Listener) *ServerConn {
 	c := &ServerConn{idx: idx}
 	c.rev = ln
 	c.read = newReadConn(c.idx, ln.blk, 's')
@@ -142,8 +141,8 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 		l.connsmu.Lock()
 		p := bytes.Buffer{}
 		conns := []*ServerConn{}
-		for i := 0; i < len(hdr.data); i += 4 {
-			connIdx := binary.BigEndian.Uint32(hdr.data[i : i+4])
+		for i := 0; i < len(hdr.data); i += 8 {
+			connIdx := binary.BigEndian.Uint64(hdr.data[i : i+8])
 			if c := l.conns[connIdx]; c != nil && c.read.err == nil && !c.read.closed {
 				c.writeTo(&p)
 				conns = append(conns, c)
@@ -317,5 +316,5 @@ func (c *ServerConn) LocalAddr() net.Addr {
 }
 
 func (c *ServerConn) String() string {
-	return fmt.Sprintf("<ServerConn_%d_read_%v_write_%d>", c.idx, c.read, c.write.counter)
+	return fmt.Sprintf("<ServerConn-%x,read:%v,write:%d>", c.idx, c.read, c.write.counter)
 }

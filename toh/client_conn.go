@@ -26,13 +26,11 @@ var (
 		IdleConnTimeout:       90 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 	}
+
 	InactivePurge      = time.Minute
 	ClientReadTimeout  = time.Second * 15
-	MaxWriteBufferSize = 1024 * 1024 * 4
-	ErrBigWriteBuf     = fmt.Errorf("writer size exceeds limit, reader may be dead")
+	MaxWriteBufferSize = 1024 * 1024 * 16
 	OnRequestServer    = func() *http.Transport { return DefaultTransport }
-
-	globalConnCounter uint32 = 0
 )
 
 type respNode struct {
@@ -41,12 +39,12 @@ type respNode struct {
 }
 
 type ClientConn struct {
-	idx      uint32
+	idx      uint64
 	endpoint string
 
 	write struct {
 		sync.Mutex
-		counter uint64
+		counter uint32
 		sched   sched.SchedKey
 		buf     []byte
 		survey  struct {
@@ -71,14 +69,14 @@ func Dial(network string, address string) (net.Conn, error) {
 
 func newClientConn(endpoint string, blk cipher.Block) (*ClientConn, error) {
 	c := &ClientConn{endpoint: endpoint}
-	c.idx = atomic.AddUint32(&globalConnCounter, 1)
+	c.idx = newConnectionIdx()
 	c.write.survey.pendingSize = 1
 	c.write.respCh = make(chan respNode, 16)
 	c.read = newReadConn(c.idx, blk, 'c')
 
 	// Say hello
 	resp, err := c.send(frame{
-		idx:     rand.Uint64(),
+		idx:     rand.Uint32(),
 		connIdx: c.idx,
 		options: optSyncConnIdx,
 		next: &frame{
@@ -193,7 +191,7 @@ func (c *ClientConn) sendWriteBuf() {
 	}
 
 	f := frame{
-		idx:     rand.Uint64(),
+		idx:     rand.Uint32(),
 		connIdx: c.idx,
 		options: optSyncConnIdx,
 		next: &frame{
@@ -266,5 +264,5 @@ func (c *ClientConn) Read(p []byte) (n int, err error) {
 }
 
 func (c *ClientConn) String() string {
-	return fmt.Sprintf("<ClientConn_%d_read_%v_write_%d>", c.idx, c.read, c.write.counter)
+	return fmt.Sprintf("<ClientConn-%x,read:%v,write:%d>", c.idx, c.read, c.write.counter)
 }

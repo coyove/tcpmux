@@ -17,7 +17,7 @@ func init() {
 
 	go func() {
 		for {
-			conns := make(map[uint32]*ClientConn)
+			conns := make(map[uint64]*ClientConn)
 		READ:
 			for {
 				select {
@@ -55,7 +55,7 @@ func init() {
 			}
 
 			pingframe := frame{options: optPing, data: p.Bytes()}
-			go func(pingframe frame, lastconn *ClientConn, conns map[uint32]*ClientConn) {
+			go func(pingframe frame, lastconn *ClientConn, conns map[uint64]*ClientConn) {
 				resp, err := lastconn.send(pingframe)
 				if err != nil {
 					vprint("orch: send error: ", err)
@@ -80,7 +80,7 @@ func init() {
 					}
 				}
 
-				vprint("orch: pings: ", len(pingframe.data)/4, ", positives: ", pcount, "(", psize, "b)+", count)
+				vprint("orch: pings: ", len(pingframe.data)/8, ", positives: ", pcount, "(", psize, "b)+", count)
 				resp.Body.Close()
 			}(pingframe, lastconn, conns)
 		}
