@@ -29,7 +29,7 @@ var (
 
 	InactivePurge      = time.Minute
 	ClientReadTimeout  = time.Second * 15
-	MaxWriteBufferSize = 1024 * 1024 * 16
+	MaxWriteBufferSize = 1024 * 1024 * 1
 	OnRequestServer    = func() *http.Transport { return DefaultTransport }
 )
 

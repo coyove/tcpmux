@@ -37,10 +37,11 @@ func init() {
 			var count int
 			var lastconn *ClientConn
 
-			for _, conn := range conns {
+			for k, conn := range conns {
 				if len(conn.write.buf) > 0 {
 					// For connections with actual data waiting to be sent, send them directly
 					go conn.sendWriteBuf()
+					delete(conns, k)
 					count++
 					continue
 				}
@@ -49,8 +50,16 @@ func init() {
 				lastconn = conn
 			}
 
+			if len(conns) <= 4 {
+				for _, conn := range conns {
+					count++
+					go conn.sendWriteBuf()
+				}
+				lastconn = nil
+			}
+
 			if lastconn == nil {
-				vprint("orch: send ", len(conns))
+				vprint("orch: send ", count)
 				continue
 			}
 
@@ -63,29 +72,32 @@ func init() {
 				}
 				defer resp.Body.Close()
 
-				pcount := 0
 				f, ok := parseframe(resp.Body, lastconn.read.blk)
 				if !ok || f.options != optPing {
 					return
 				}
 
+				positives := 0
 				for i := 0; i < len(f.data); i += 10 {
 					connState := binary.BigEndian.Uint16(f.data[i:])
 					connIdx := binary.BigEndian.Uint64(f.data[i+2:])
 
 					if c := conns[connIdx]; c != nil && !c.read.closed && c.read.err == nil {
-						if connState == 2 {
+						switch connState {
+						case PING_CLOSED:
 							vprint(c, " the other side is closed")
 							c.read.feedError(fmt.Errorf("use if closed connection"))
 							c.Close()
-						} else {
-							pcount++
+						case PING_OK_VOID:
+
+						case PING_OK:
+							positives++
 							go c.sendWriteBuf()
 						}
 					}
 				}
 
-				vprint("orch: pings: ", len(pingframe.data)/8, ", positives: ", pcount, "+", count)
+				vprint("orch: pings: ", len(pingframe.data)/8, ", positives: ", positives, "+", count)
 				resp.Body.Close()
 			}(pingframe, lastconn, conns)
 		}

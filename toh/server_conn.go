@@ -16,6 +16,12 @@ import (
 	"github.com/coyove/common/sched"
 )
 
+const (
+	PING_OK uint16 = iota + 1
+	PING_CLOSED
+	PING_OK_VOID
+)
+
 type ServerConn struct {
 	idx        uint64
 	rev        *Listener
@@ -144,10 +150,14 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 			connIdx := binary.BigEndian.Uint64(hdr.data[i : i+8])
 
 			if c := l.conns[connIdx]; c != nil && c.read.err == nil && !c.read.closed {
-				binary.Write(&p, binary.BigEndian, uint16(1))
+				if len(c.write.buf) > 0 {
+					binary.Write(&p, binary.BigEndian, PING_OK)
+				} else {
+					binary.Write(&p, binary.BigEndian, PING_OK_VOID)
+				}
 				c.reschedDeath()
 			} else {
-				binary.Write(&p, binary.BigEndian, uint16(2))
+				binary.Write(&p, binary.BigEndian, PING_CLOSED)
 			}
 
 			binary.Write(&p, binary.BigEndian, connIdx)
