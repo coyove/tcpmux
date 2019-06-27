@@ -61,26 +61,31 @@ func init() {
 					vprint("orch: send error: ", err)
 					return
 				}
-				pcount, psize := 0, 0
-				for {
-					f, ok := parseframe(resp.Body, lastconn.read.blk)
-					if !ok || f.idx == 0 {
-						break
-					}
-					psize += len(f.data)
-					if c := conns[f.connIdx]; c != nil && !c.read.closed && c.read.err == nil {
-						if f.options == optClosed {
+				defer resp.Body.Close()
+
+				pcount := 0
+				f, ok := parseframe(resp.Body, lastconn.read.blk)
+				if !ok || f.options != optPing {
+					return
+				}
+
+				for i := 0; i < len(f.data); i += 10 {
+					connState := binary.BigEndian.Uint16(f.data[i:])
+					connIdx := binary.BigEndian.Uint64(f.data[i+2:])
+
+					if c := conns[connIdx]; c != nil && !c.read.closed && c.read.err == nil {
+						if connState == 2 {
 							vprint(c, " the other side is closed")
 							c.read.feedError(fmt.Errorf("use if closed connection"))
 							c.Close()
-							continue
+						} else {
+							pcount++
+							go c.sendWriteBuf()
 						}
-						c.write.respCh <- respNode{f: f}
-						pcount++
 					}
 				}
 
-				vprint("orch: pings: ", len(pingframe.data)/8, ", positives: ", pcount, "(", psize, "b)+", count)
+				vprint("orch: pings: ", len(pingframe.data)/8, ", positives: ", pcount, "+", count)
 				resp.Body.Close()
 			}(pingframe, lastconn, conns)
 		}

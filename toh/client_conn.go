@@ -252,6 +252,7 @@ func (c *ClientConn) respLoop() {
 				body.r.Close()
 			} else {
 				if c.read.err == nil && !c.read.closed {
+					vprint(c, body.f.idx)
 					c.read.feedframe(body.f)
 				}
 			}

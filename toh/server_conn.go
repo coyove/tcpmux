@@ -140,35 +140,22 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 	case optPing:
 		l.connsmu.Lock()
 		p := bytes.Buffer{}
-		conns := []*ServerConn{}
 		for i := 0; i < len(hdr.data); i += 8 {
 			connIdx := binary.BigEndian.Uint64(hdr.data[i : i+8])
+
 			if c := l.conns[connIdx]; c != nil && c.read.err == nil && !c.read.closed {
-				c.writeTo(&p)
-				conns = append(conns, c)
-				continue
+				binary.Write(&p, binary.BigEndian, uint16(1))
+				c.reschedDeath()
+			} else {
+				binary.Write(&p, binary.BigEndian, uint16(2))
 			}
-			f := frame{connIdx: connIdx, options: optClosed}
-			io.Copy(&p, f.marshal(l.blk))
+
+			binary.Write(&p, binary.BigEndian, connIdx)
 		}
 		l.connsmu.Unlock()
 
-		for _, conn := range conns {
-			conn.reschedDeath()
-		}
-
-		var err error
-		for deadline := time.Now().Add(InactivePurge); time.Now().Before(deadline); {
-			if _, err = w.Write(p.Bytes()); err == nil {
-				return
-			}
-		}
-
-		vprint("ping batch write: ", err)
-		for _, conn := range conns {
-			conn.read.feedError(err)
-			conn.Close()
-		}
+		f := frame{options: optPing, data: p.Bytes()}
+		io.Copy(w, f.marshal(l.blk))
 		return
 	default:
 		l.randomReply(w)

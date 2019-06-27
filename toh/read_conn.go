@@ -150,19 +150,19 @@ LOOP:
 				c.counter = f.idx
 				delete(c.futureframes, f.idx)
 				c.futureSize -= len(f.data)
-			} else {
-				if c.futureSize > 1024 {
-					if ioutil.WriteFile(frameTmpPath(c.idx, f.idx), f.data, 0755) != nil {
-						c.Unlock()
-						c.feedError(fmt.Errorf("fatal: missing certain frame"))
-						return
-					}
-
-					vprint(c, " tmp save frame: ", f)
-					c.futureframes[f.idx] = frame{future: true, idx: f.idx}
-				}
-				break
+				continue
 			}
+			if c.futureSize > 1024 {
+				if ioutil.WriteFile(frameTmpPath(c.idx, f.idx), f.data, 0755) != nil {
+					c.Unlock()
+					c.feedError(fmt.Errorf("fatal: missing certain frame"))
+					return
+				}
+
+				vprint(c, " tmp save frame: ", f)
+				c.futureframes[f.idx] = frame{future: true, idx: f.idx}
+			}
+			break
 		}
 		if c.counter == 0xffffffff {
 			panic("surprise!")
