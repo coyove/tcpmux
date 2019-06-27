@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"math/rand"
 	"time"
 
 	"github.com/coyove/common/sched"
@@ -14,6 +15,7 @@ var orch chan *ClientConn
 func init() {
 	orch = make(chan *ClientConn, 256)
 	sched.Verbose = false
+	rand.Seed(time.Now().UnixNano())
 
 	go func() {
 		for {
@@ -38,7 +40,7 @@ func init() {
 			var lastconn *ClientConn
 
 			for k, conn := range conns {
-				if len(conn.write.buf) > 0 {
+				if len(conn.write.buf) > 0 || conn.write.survey.lastIsPositive {
 					// For connections with actual data waiting to be sent, send them directly
 					go conn.sendWriteBuf()
 					delete(conns, k)
@@ -50,7 +52,7 @@ func init() {
 				lastconn = conn
 			}
 
-			if len(conns) <= 4 {
+			if len(conns) <= 3 {
 				for _, conn := range conns {
 					count++
 					go conn.sendWriteBuf()
@@ -59,7 +61,7 @@ func init() {
 			}
 
 			if lastconn == nil {
-				vprint("orch: send ", count)
+				vprint("[orch]  batch ping: 0, direct: ", count)
 				continue
 			}
 
@@ -67,7 +69,7 @@ func init() {
 			go func(pingframe frame, lastconn *ClientConn, conns map[uint64]*ClientConn) {
 				resp, err := lastconn.send(pingframe)
 				if err != nil {
-					vprint("orch: send error: ", err)
+					vprint("[orch]  send error: ", err)
 					return
 				}
 				defer resp.Body.Close()
@@ -89,15 +91,16 @@ func init() {
 							c.read.feedError(fmt.Errorf("use if closed connection"))
 							c.Close()
 						case PING_OK_VOID:
-
+							c.write.survey.lastIsPositive = false
 						case PING_OK:
 							positives++
+							c.write.survey.lastIsPositive = true
 							go c.sendWriteBuf()
 						}
 					}
 				}
 
-				vprint("orch: pings: ", len(pingframe.data)/8, ", positives: ", positives, "+", count)
+				vprint("[orch]  batch ping: ", len(pingframe.data)/8, "(+", positives, "), direct: ", count)
 				resp.Body.Close()
 			}(pingframe, lastconn, conns)
 		}

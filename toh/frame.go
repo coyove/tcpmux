@@ -98,5 +98,5 @@ func parseframe(r io.ReadCloser, blk cipher.Block) (f frame, ok bool) {
 }
 
 func (f frame) String() string {
-	return fmt.Sprintf("<frame-%d,conn:%d,opt:%d,len:%d>", f.idx, f.connIdx, f.options, len(f.data))
+	return fmt.Sprintf("<frame:%d,conn:%d,opt:%d,len:%d>", f.idx, f.connIdx, f.options, len(f.data))
 }

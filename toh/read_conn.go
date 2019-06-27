@@ -152,7 +152,8 @@ LOOP:
 				c.futureSize -= len(f.data)
 				continue
 			}
-			if c.futureSize > 1024 {
+
+			if c.futureSize > MaxReadBufferSize {
 				if ioutil.WriteFile(frameTmpPath(c.idx, f.idx), f.data, 0755) != nil {
 					c.Unlock()
 					c.feedError(fmt.Errorf("fatal: missing certain frame"))
@@ -207,4 +208,8 @@ READ:
 	}
 
 	goto READ
+}
+
+func (c *readConn) String() string {
+	return fmt.Sprintf("<%s,ctr:%d>", string(c.tag), c.counter)
 }

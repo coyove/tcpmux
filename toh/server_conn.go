@@ -313,5 +313,5 @@ func (c *ServerConn) LocalAddr() net.Addr {
 }
 
 func (c *ServerConn) String() string {
-	return fmt.Sprintf("<ServerConn-%x,read:%v,write:%d>", c.idx, c.read, c.write.counter)
+	return fmt.Sprintf("<ServerConn:%x,r:%d,w:%d>", c.idx, c.read.counter, c.write.counter)
 }

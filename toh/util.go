@@ -16,10 +16,6 @@ var (
 	Verbose = true
 )
 
-func (c *readConn) String() string {
-	return fmt.Sprintf("<readConn:%s,ctr:%d>", string(c.tag), c.counter)
-}
-
 type timeoutError struct{}
 
 func (e *timeoutError) Error() string {

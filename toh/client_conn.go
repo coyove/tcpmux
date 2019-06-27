@@ -30,6 +30,7 @@ var (
 	InactivePurge      = time.Minute
 	ClientReadTimeout  = time.Second * 15
 	MaxWriteBufferSize = 1024 * 1024 * 1
+	MaxReadBufferSize  = 1024 * 1024 * 1
 	OnRequestServer    = func() *http.Transport { return DefaultTransport }
 )
 
@@ -48,8 +49,9 @@ type ClientConn struct {
 		sched   sched.SchedKey
 		buf     []byte
 		survey  struct {
-			pendingSize  int
-			reschedCount int64
+			lastIsPositive bool
+			pendingSize    int
+			reschedCount   int64
 		}
 		respCh     chan respNode
 		respChOnce sync.Once
@@ -247,7 +249,9 @@ func (c *ClientConn) respLoop() {
 			}
 			if body.r != nil {
 				k := sched.ScheduleSync(func() { body.r.Close() }, time.Now().Add(ClientReadTimeout))
-				c.read.feedframes(body.r)
+				if n, _ := c.read.feedframes(body.r); n == 0 {
+					c.write.survey.lastIsPositive = false
+				}
 				k.Cancel()
 				body.r.Close()
 			} else {
@@ -265,5 +269,5 @@ func (c *ClientConn) Read(p []byte) (n int, err error) {
 }
 
 func (c *ClientConn) String() string {
-	return fmt.Sprintf("<ClientConn-%x,read:%v,write:%d>", c.idx, c.read, c.write.counter)
+	return fmt.Sprintf("<ClientConn:%x,r:%d,w:%d>", c.idx, c.read.counter, c.write.counter)
 }
