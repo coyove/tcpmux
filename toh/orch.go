@@ -61,7 +61,7 @@ func init() {
 			}
 
 			if lastconn == nil {
-				vprint("[orch]  batch ping: 0, direct: ", count)
+				vprint("batch ping: 0, direct: ", count)
 				continue
 			}
 
@@ -69,7 +69,7 @@ func init() {
 			go func(pingframe frame, lastconn *ClientConn, conns map[uint64]*ClientConn) {
 				resp, err := lastconn.send(pingframe)
 				if err != nil {
-					vprint("[orch]  send error: ", err)
+					vprint("send error: ", err)
 					return
 				}
 				defer resp.Body.Close()
@@ -100,7 +100,7 @@ func init() {
 					}
 				}
 
-				vprint("[orch]  batch ping: ", len(pingframe.data)/8, "(+", positives, "), direct: ", count)
+				vprint("batch ping: ", len(pingframe.data)/8, "(+", positives, "), direct: ", count)
 				resp.Body.Close()
 			}(pingframe, lastconn, conns)
 		}

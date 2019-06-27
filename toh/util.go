@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -60,8 +61,24 @@ func vprint(v ...interface{}) {
 	if !Verbose {
 		return
 	}
+	strip := func(fn string) string {
+		fn = filepath.Base(fn)
+		return fn[:len(fn)-3] // ".go"
+	}
+
 	_, fn, line, _ := runtime.Caller(1)
-	fmt.Println(fmt.Sprintf("%s %s:%d] ", time.Now().Format("Jan _2 15:04:05.000"), filepath.Base(fn), line), fmt.Sprint(v...))
+	_, fn2, line2, _ := runtime.Caller(2)
+
+	now := time.Now().Format("Jan _2 15:04:05.000")
+	str := fmt.Sprint(v...)
+
+	if !strings.HasSuffix(fn2, ".go") {
+		fmt.Println(fmt.Sprintf("%s %s:%d] ", now, strip(fn), line), str)
+	} else if fn == fn2 {
+		fmt.Println(fmt.Sprintf("%s %s:%d\u00bb%d] ", now, strip(fn), line2, line), str)
+	} else {
+		fmt.Println(fmt.Sprintf("%s %s:%d\u00bb%s:%d] ", now, strip(fn2), line2, strip(fn), line), str)
+	}
 }
 
 var countermark uint32
