@@ -90,7 +90,7 @@ func newClientConn(endpoint string, blk cipher.Block) (*ClientConn, error) {
 	}
 	resp.Body.Close()
 
-	c.write.sched = sched.ScheduleSync(c.schedSending, time.Now().Add(time.Second))
+	c.write.sched = sched.Schedule(c.schedSending, time.Second)
 
 	go c.respLoop()
 	go c.respLoop()
@@ -150,10 +150,10 @@ REWRITE:
 	}
 
 	c.write.Lock()
-	c.write.sched.RescheduleSync(func() {
+	c.write.sched.Reschedule(func() {
 		c.write.survey.pendingSize = 1
 		c.schedSending()
-	}, time.Now().Add(time.Second))
+	}, time.Second)
 	c.write.buf = append(c.write.buf, p...)
 	c.write.Unlock()
 
@@ -174,10 +174,10 @@ func (c *ClientConn) schedSending() {
 	}
 
 	orchSendWriteBuf(c)
-	c.write.sched.RescheduleSync(func() {
+	c.write.sched.Reschedule(func() {
 		c.write.survey.pendingSize = 1
 		c.schedSending()
-	}, time.Now().Add(time.Second))
+	}, time.Second)
 }
 
 func (c *ClientConn) sendWriteBuf() {
@@ -248,7 +248,7 @@ func (c *ClientConn) respLoop() {
 				return
 			}
 			if body.r != nil {
-				k := sched.ScheduleSync(func() { body.r.Close() }, time.Now().Add(ClientReadTimeout))
+				k := sched.Schedule(func() { body.r.Close() }, ClientReadTimeout)
 				if n, _ := c.read.feedframes(body.r); n == 0 {
 					c.write.survey.lastIsPositive = false
 				}

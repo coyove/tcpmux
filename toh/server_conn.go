@@ -216,7 +216,7 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (conn *ServerConn) reschedDeath() {
-	conn.schedPurge.RescheduleSync(func() { conn.Close() }, time.Now().Add(InactivePurge))
+	conn.schedPurge.Reschedule(func() { conn.Close() }, InactivePurge)
 }
 
 func (conn *ServerConn) writeTo(w io.Writer) {
