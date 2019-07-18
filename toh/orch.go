@@ -12,6 +12,7 @@ import (
 
 var orch chan *ClientConn
 
+// TODO: dialer
 func init() {
 	orch = make(chan *ClientConn, 256)
 	sched.Verbose = false
