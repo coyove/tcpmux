@@ -106,7 +106,7 @@ func NewDialer(network string, endpoint string, options ...Option) *Dialer {
 		orch:     make(chan *ClientConn, 128),
 	}
 	d.blk, _ = aes.NewCipher([]byte(network + "0123456789abcdef")[:16])
-	d.start()
+	d.startOrch()
 
 	for _, o := range options {
 		o(d, nil)

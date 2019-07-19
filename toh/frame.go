@@ -34,13 +34,9 @@ func (f *frame) marshal(blk cipher.Block) io.Reader {
 	binary.BigEndian.PutUint32(buf[:4], f.idx)
 	binary.BigEndian.PutUint64(buf[4:], f.connIdx)
 
-	if len(f.data) == 0 {
-		f.data = make([]byte, 0, 16)
-	}
-
 	gcm, _ := cipher.NewGCM(blk)
-	f.data = gcm.Seal(f.data[:0], buf[:12], f.data, nil)
-	binary.LittleEndian.PutUint32(buf[12:], uint32(len(f.data)))
+	x := gcm.Seal(f.data[:0], buf[:12], f.data, nil)
+	binary.LittleEndian.PutUint32(buf[12:], uint32(len(x)))
 	buf[16] = f.options
 
 	h := crc32.Checksum(buf[:17], crc32.IEEETable)
@@ -50,14 +46,14 @@ func (f *frame) marshal(blk cipher.Block) io.Reader {
 	blk.Encrypt(buf[4:], buf[4:])
 
 	if f.next == nil {
-		return io.MultiReader(bytes.NewReader(buf[:]), bytes.NewReader(f.data))
+		return io.MultiReader(bytes.NewReader(buf[:]), bytes.NewReader(x))
 	}
-	return io.MultiReader(bytes.NewReader(buf[:]), bytes.NewReader(f.data), f.next.marshal(blk))
+	return io.MultiReader(bytes.NewReader(buf[:]), bytes.NewReader(x), f.next.marshal(blk))
 }
 
 func parseframe(r io.ReadCloser, blk cipher.Block) (f frame, ok bool) {
 	k := sched.Schedule(func() {
-		vprint("parseframe, waiting too long")
+		vprint("[ParseFrame] waiting too long")
 		r.Close()
 	}, time.Minute)
 	defer k.Cancel()
@@ -98,5 +94,5 @@ func parseframe(r io.ReadCloser, blk cipher.Block) (f frame, ok bool) {
 }
 
 func (f frame) String() string {
-	return fmt.Sprintf("<frame:%d,conn:%d,opt:%d,len:%d>", f.idx, f.connIdx, f.options, len(f.data))
+	return fmt.Sprintf("<F:%d,conn:%d,opt:%d,len:%d>", f.idx, f.connIdx, f.options, len(f.data))
 }

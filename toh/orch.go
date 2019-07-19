@@ -3,16 +3,18 @@ package toh
 import (
 	"bytes"
 	"encoding/binary"
-	"fmt"
 	"math/rand"
 	"time"
 
 	"github.com/coyove/common/sched"
 )
 
-func (d *Dialer) start() {
-	sched.Verbose = false
+func init() {
 	rand.Seed(time.Now().UnixNano())
+}
+
+func (d *Dialer) startOrch() {
+	sched.Verbose = false
 
 	go func() {
 		for {
@@ -32,9 +34,11 @@ func (d *Dialer) start() {
 				continue
 			}
 
-			var p bytes.Buffer
-			var count int
-			var lastconn *ClientConn
+			var (
+				p        bytes.Buffer
+				count    int
+				lastconn *ClientConn
+			)
 
 			for k, conn := range conns {
 				if len(conn.write.buf) > 0 || conn.write.survey.lastIsPositive {
@@ -85,7 +89,7 @@ func (d *Dialer) start() {
 						switch connState {
 						case PING_CLOSED:
 							vprint(c, " the other side is closed")
-							c.read.feedError(fmt.Errorf("use if closed connection"))
+							c.read.feedError(errClosedConn)
 							c.Close()
 						case PING_OK_VOID:
 							c.write.survey.lastIsPositive = false
