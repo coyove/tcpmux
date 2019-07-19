@@ -194,6 +194,7 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 		l.pendingConns <- conn
 		vprint("server: new conn: ", conn)
 		conn.reschedDeath()
+		//conn.writeTo(w)
 		return
 	}
 
@@ -225,6 +226,10 @@ func (conn *ServerConn) writeTo(w io.Writer) {
 		conn.write.Lock()
 		if len(conn.write.buf) == 0 {
 			conn.write.Unlock()
+			if i == 0 {
+				time.Sleep(200 * time.Millisecond)
+				continue
+			}
 			return
 		}
 

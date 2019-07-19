@@ -63,7 +63,11 @@ func (s *client) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		host += ":80"
 	}
 
-	up, _ := Dial("tcp", s.upstream)
+	up, err := Dial("tcp", s.upstream)
+	if err != nil {
+		log.Println(err)
+		return
+	}
 	up.Write([]byte(r.Method[:1] + host + "\n"))
 
 	down, _, _ := w.(http.Hijacker).Hijack()

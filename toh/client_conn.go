@@ -224,7 +224,7 @@ func (c *ClientConn) sendWriteBuf() {
 
 func (c *ClientConn) send(f frame) (resp *http.Response, err error) {
 	client := &http.Client{
-		Timeout:   time.Second * 5,
+		Timeout:   time.Second * 15,
 		Transport: OnRequestServer(),
 	}
 
