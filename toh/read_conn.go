@@ -14,9 +14,12 @@ import (
 )
 
 var (
-	ErrClosedConn = fmt.Errorf("use of closed connection")
+	errClosedConn = fmt.Errorf("use of closed connection")
 	dummyTouch    = func(interface{}) interface{} { return 1 }
 )
+
+// Define the max pending bytes stored in memory, any further bytes will be written to disk
+var MaxReadBufferSize = 1024 * 1024 * 1
 
 type readConn struct {
 	sync.Mutex
@@ -59,7 +62,7 @@ func (c *readConn) feedframes(r io.ReadCloser) (datalen int, err error) {
 			break
 		}
 		if c.closed {
-			return 0, ErrClosedConn
+			return 0, errClosedConn
 		}
 		if c.err != nil {
 			return 0, c.err
@@ -67,7 +70,7 @@ func (c *readConn) feedframes(r io.ReadCloser) (datalen int, err error) {
 
 		debugprint("feed: ", f.data)
 		if !c.feedframe(f) {
-			return 0, ErrClosedConn
+			return 0, errClosedConn
 		}
 		count += len(f.data)
 	}
@@ -177,7 +180,7 @@ LOOP:
 func (c *readConn) Read(p []byte) (n int, err error) {
 READ:
 	if c.closed {
-		return 0, ErrClosedConn
+		return 0, errClosedConn
 	}
 
 	if c.err != nil {
@@ -200,7 +203,7 @@ READ:
 	_, ontime := c.ready.Wait()
 
 	if c.closed {
-		return 0, ErrClosedConn
+		return 0, errClosedConn
 	}
 
 	if !ontime {

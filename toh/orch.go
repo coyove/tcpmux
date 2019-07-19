@@ -10,11 +10,7 @@ import (
 	"github.com/coyove/common/sched"
 )
 
-var orch chan *ClientConn
-
-// TODO: dialer
-func init() {
-	orch = make(chan *ClientConn, 256)
+func (d *Dialer) start() {
 	sched.Verbose = false
 	rand.Seed(time.Now().UnixNano())
 
@@ -108,9 +104,9 @@ func init() {
 	}()
 }
 
-func orchSendWriteBuf(c *ClientConn) {
+func (d *Dialer) orchSendWriteBuf(c *ClientConn) {
 	select {
-	case orch <- c:
+	case d.orch <- c:
 	default:
 		go c.sendWriteBuf()
 	}

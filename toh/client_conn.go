@@ -27,17 +27,12 @@ var (
 		ExpectContinueTimeout: 1 * time.Second,
 	}
 
-	InactivePurge      = time.Minute
-	ClientReadTimeout  = time.Second * 15
-	MaxWriteBufferSize = 1024 * 1024 * 1
-	MaxReadBufferSize  = 1024 * 1024 * 1
-	OnRequestServer    = func() *http.Transport { return DefaultTransport }
-)
+	InactivePurge = time.Minute
 
-type respNode struct {
-	r io.ReadCloser
-	f frame
-}
+	ClientTimeout = time.Second * 15
+
+	OnRequestServer = func() *http.Transport { return DefaultTransport }
+)
 
 type ClientConn struct {
 	idx      uint64
@@ -53,7 +48,7 @@ type ClientConn struct {
 			pendingSize    int
 			reschedCount   int64
 		}
-		respCh     chan respNode
+		respCh     chan io.ReadCloser
 		respChOnce sync.Once
 	}
 
@@ -73,7 +68,7 @@ func newClientConn(endpoint string, blk cipher.Block) (*ClientConn, error) {
 	c := &ClientConn{endpoint: endpoint}
 	c.idx = newConnectionIdx()
 	c.write.survey.pendingSize = 1
-	c.write.respCh = make(chan respNode, 16)
+	c.write.respCh = make(chan io.ReadCloser, 128)
 	c.read = newReadConn(c.idx, blk, 'c')
 
 	// Say hello
@@ -92,7 +87,6 @@ func newClientConn(endpoint string, blk cipher.Block) (*ClientConn, error) {
 
 	c.write.sched = sched.Schedule(c.schedSending, time.Second)
 
-	go c.respLoop()
 	go c.respLoop()
 	return c, nil
 }
@@ -140,7 +134,7 @@ REWRITE:
 	}
 
 	if c.read.closed {
-		return 0, ErrClosedConn
+		return 0, errClosedConn
 	}
 
 	if len(c.write.buf) > MaxWriteBufferSize {
@@ -215,7 +209,14 @@ func (c *ClientConn) sendWriteBuf() {
 			c.write.counter++
 			func() {
 				defer func() { recover() }()
-				c.write.respCh <- respNode{r: resp.Body}
+				select {
+				case c.write.respCh <- resp.Body:
+				default:
+					go func(resp *http.Response) {
+						c.read.feedframes(resp.Body)
+						resp.Body.Close()
+					}(resp)
+				}
 			}()
 			break
 		}
@@ -224,7 +225,7 @@ func (c *ClientConn) sendWriteBuf() {
 
 func (c *ClientConn) send(f frame) (resp *http.Response, err error) {
 	client := &http.Client{
-		Timeout:   time.Second * 15,
+		Timeout:   ClientTimeout,
 		Transport: OnRequestServer(),
 	}
 
@@ -241,27 +242,15 @@ func (c *ClientConn) send(f frame) (resp *http.Response, err error) {
 }
 
 func (c *ClientConn) respLoop() {
-	for {
-		select {
-		case body, ok := <-c.write.respCh:
-			if !ok {
-				return
-			}
-			if body.r != nil {
-				k := sched.Schedule(func() { body.r.Close() }, ClientReadTimeout)
-				if n, _ := c.read.feedframes(body.r); n == 0 {
-					c.write.survey.lastIsPositive = false
-				}
-				k.Cancel()
-				body.r.Close()
-			} else {
-				if c.read.err == nil && !c.read.closed {
-					vprint(c, body.f.idx)
-					c.read.feedframe(body.f)
-				}
-			}
-		} // end of select
+	for body := range c.write.respCh {
+		k := sched.Schedule(func() { body.Close() }, ClientTimeout)
+		if n, _ := c.read.feedframes(body); n == 0 {
+			c.write.survey.lastIsPositive = false
+		}
+		k.Cancel()
+		body.Close()
 	}
+	vprint(c, " resp out")
 }
 
 func (c *ClientConn) Read(p []byte) (n int, err error) {
@@ -269,5 +258,5 @@ func (c *ClientConn) Read(p []byte) (n int, err error) {
 }
 
 func (c *ClientConn) String() string {
-	return fmt.Sprintf("<ClientConn:%x,r:%d,w:%d>", c.idx, c.read.counter, c.write.counter)
+	return fmt.Sprintf("<C:%x,r:%d,w:%d>", c.idx, c.read.counter, c.write.counter)
 }

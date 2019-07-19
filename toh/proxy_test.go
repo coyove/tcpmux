@@ -57,6 +57,8 @@ type client struct {
 
 type server int
 
+var dd *Dialer
+
 func (s *client) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	host := r.Host
 	if !strings.Contains(host, ":") {
@@ -134,6 +136,9 @@ func TestProxy(t *testing.T) {
 		if up == "" {
 			up = ":10001"
 		}
+
+		dd = NewDialer(up)
+
 		go http.ListenAndServe(":10000", &client{
 			upstream: up,
 		})
