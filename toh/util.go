@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"math/rand"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -93,3 +94,25 @@ func newConnectionIdx() uint64 {
 func frameTmpPath(connIdx uint64, idx uint32) string {
 	return filepath.Join(os.TempDir(), fmt.Sprintf("%x-%d.toh", connIdx, idx))
 }
+
+type Option func(d *Dialer, ln *Listener)
+
+var (
+	WithTransport = func(tr http.RoundTripper) Option {
+		return Option(func(d *Dialer, ln *Listener) {
+			if d != nil {
+				d.Transport = tr
+			}
+		})
+	}
+	WithInactiveTimeout = func(t time.Duration) Option {
+		return Option(func(d *Dialer, ln *Listener) {
+			if d != nil {
+				d.Timeout = t
+			}
+			if ln != nil {
+				ln.InactivePurge = t
+			}
+		})
+	}
+)

@@ -146,7 +146,7 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (conn *ServerConn) reschedDeath() {
-	conn.schedPurge.Reschedule(func() { conn.Close() }, InactivePurge)
+	conn.schedPurge.Reschedule(func() { conn.Close() }, conn.rev.InactivePurge)
 }
 
 func (conn *ServerConn) writeTo(w io.Writer) {
@@ -173,7 +173,7 @@ func (conn *ServerConn) writeTo(w io.Writer) {
 		conn.write.counter++
 		conn.write.Unlock()
 
-		deadline := time.Now().Add(InactivePurge - time.Second)
+		deadline := time.Now().Add(conn.rev.InactivePurge - time.Second)
 	AGAIN:
 		if _, err := io.Copy(w, f.marshal(conn.read.blk)); err != nil {
 			if time.Now().Before(deadline) {

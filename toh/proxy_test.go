@@ -65,7 +65,7 @@ func (s *client) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		host += ":80"
 	}
 
-	up, err := Dial("tcp", s.upstream)
+	up, err := dd.Dial()
 	if err != nil {
 		log.Println(err)
 		return
@@ -127,8 +127,6 @@ func TestProxy(t *testing.T) {
 
 	//p, _ := url.Parse("68.183.156.72:8080")
 	//DefaultTransport.Proxy = http.ProxyURL(p)
-	DefaultTransport.MaxConnsPerHost = 10
-	DefaultTransport.MaxIdleConns = 10
 
 	go func() {
 		log.Println("hello")
@@ -137,13 +135,16 @@ func TestProxy(t *testing.T) {
 			up = ":10001"
 		}
 
-		dd = NewDialer(up)
+		dd = NewDialer("tcp", up,
+			WithTransport(http.DefaultTransport),
+			WithInactiveTimeout(time.Second*10))
 
 		go http.ListenAndServe(":10000", &client{
 			upstream: up,
 		})
 
-		ln, _ := Listen("tcp", ":10001")
+		ln, _ := Listen("tcp", ":10001",
+			WithInactiveTimeout(time.Second*10))
 		for {
 			conn, _ := ln.Accept()
 			go foo(conn)

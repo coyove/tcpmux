@@ -18,6 +18,8 @@ type Listener struct {
 	httpServeErr chan error
 	pendingConns chan *ServerConn
 	blk          cipher.Block
+
+	InactivePurge time.Duration
 }
 
 func (l *Listener) Close() error {
@@ -43,7 +45,7 @@ func (l *Listener) Accept() (net.Conn, error) {
 	}
 }
 
-func Listen(network string, address string) (net.Listener, error) {
+func Listen(network string, address string, options ...Option) (net.Listener, error) {
 	ln, err := net.Listen("tcp", address)
 	if err != nil {
 		return nil, err
@@ -54,6 +56,14 @@ func Listen(network string, address string) (net.Listener, error) {
 		httpServeErr: make(chan error, 1),
 		pendingConns: make(chan *ServerConn, 1024),
 		conns:        map[uint64]*ServerConn{},
+	}
+
+	for _, o := range options {
+		o(nil, l)
+	}
+
+	if l.InactivePurge == 0 {
+		l.InactivePurge = time.Second * 20
 	}
 
 	l.blk, _ = aes.NewCipher([]byte(network + "0123456789abcdef")[:16])
@@ -83,15 +93,30 @@ func Listen(network string, address string) (net.Listener, error) {
 }
 
 type Dialer struct {
-	endpoint string
-	orch     chan *ClientConn
+	endpoint  string
+	orch      chan *ClientConn
+	blk       cipher.Block
+	Transport http.RoundTripper
+	Timeout   time.Duration
 }
 
-func NewDialer(endpoint string) *Dialer {
+func NewDialer(network string, endpoint string, options ...Option) *Dialer {
 	d := &Dialer{
 		endpoint: endpoint,
 		orch:     make(chan *ClientConn, 128),
 	}
+	d.blk, _ = aes.NewCipher([]byte(network + "0123456789abcdef")[:16])
 	d.start()
+
+	for _, o := range options {
+		o(d, nil)
+	}
+
+	if d.Transport == nil {
+		d.Transport = http.DefaultTransport
+	}
+	if d.Timeout == 0 {
+		d.Timeout = time.Second * 15
+	}
 	return d
 }

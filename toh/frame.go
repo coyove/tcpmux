@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"time"
 
 	"github.com/coyove/common/sched"
 )
@@ -58,7 +59,7 @@ func parseframe(r io.ReadCloser, blk cipher.Block) (f frame, ok bool) {
 	k := sched.Schedule(func() {
 		vprint("parseframe, waiting too long")
 		r.Close()
-	}, InactivePurge/2)
+	}, time.Minute)
 	defer k.Cancel()
 
 	header := [20]byte{}

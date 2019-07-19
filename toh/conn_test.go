@@ -36,7 +36,7 @@ func TestClientConn(t *testing.T) {
 		conn.Write(p[:])
 	}()
 
-	conn, _ := Dial("tcp", "127.0.0.1:13739")
+	conn, _ := NewDialer("tcp", "127.0.0.1:13739").Dial()
 	conn.Write([]byte{1})
 	p := [1]byte{}
 	conn.Read(p[:])
@@ -53,7 +53,7 @@ func TestReadDeadline(t *testing.T) {
 		conn.Write([]byte{1})
 	}()
 
-	conn, _ := Dial("tcp", "127.0.0.1:13739")
+	conn, _ := NewDialer("tcp", "127.0.0.1:13739").Dial()
 	p := [1]byte{}
 	conn.SetReadDeadline(time.Now().Add(time.Second))
 	_, err := conn.Read(p[:])
@@ -87,10 +87,11 @@ func TestHTTPServer(t *testing.T) {
 	}()
 
 	num := 1
+	dd := NewDialer("tcp", "127.0.0.1:13739")
 	client := http.Client{
 		Transport: &http.Transport{
 			Dial: func(network, addr string) (net.Conn, error) {
-				return Dial("tcp", "127.0.0.1:13739")
+				return dd.Dial()
 			},
 			MaxConnsPerHost: 10,
 		},

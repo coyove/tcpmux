@@ -20,7 +20,7 @@ func (d *Dialer) start() {
 		READ:
 			for {
 				select {
-				case c := <-orch:
+				case c := <-d.orch:
 					conns[c.idx] = c
 				case <-time.After((time.Millisecond) * 50):
 					break READ

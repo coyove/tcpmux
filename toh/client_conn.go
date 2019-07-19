@@ -1,8 +1,6 @@
 package toh
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
 	"fmt"
 	"io"
 	"math/rand"
@@ -15,28 +13,9 @@ import (
 	"github.com/coyove/common/sched"
 )
 
-var (
-	DefaultTransport = &http.Transport{
-		DialContext: (&net.Dialer{
-			Timeout:   30 * time.Second,
-			KeepAlive: 30 * time.Second,
-			DualStack: true,
-		}).DialContext,
-		MaxIdleConns:          100,
-		IdleConnTimeout:       90 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-	}
-
-	InactivePurge = time.Minute
-
-	ClientTimeout = time.Second * 15
-
-	OnRequestServer = func() *http.Transport { return DefaultTransport }
-)
-
 type ClientConn struct {
-	idx      uint64
-	endpoint string
+	idx    uint64
+	dialer *Dialer
 
 	write struct {
 		sync.Mutex
@@ -55,21 +34,20 @@ type ClientConn struct {
 	read *readConn
 }
 
-func Dial(network string, address string) (net.Conn, error) {
-	blk, _ := aes.NewCipher([]byte(network + "0123456789abcdef")[:16])
-	c, err := newClientConn("http://"+address+"/", blk)
+func (d *Dialer) Dial() (net.Conn, error) {
+	c, err := d.newClientConn()
 	if err != nil {
 		return nil, err
 	}
 	return c, nil
 }
 
-func newClientConn(endpoint string, blk cipher.Block) (*ClientConn, error) {
-	c := &ClientConn{endpoint: endpoint}
+func (d *Dialer) newClientConn() (*ClientConn, error) {
+	c := &ClientConn{dialer: d}
 	c.idx = newConnectionIdx()
 	c.write.survey.pendingSize = 1
 	c.write.respCh = make(chan io.ReadCloser, 128)
-	c.read = newReadConn(c.idx, blk, 'c')
+	c.read = newReadConn(c.idx, d.blk, 'c')
 
 	// Say hello
 	resp, err := c.send(frame{
@@ -167,7 +145,7 @@ func (c *ClientConn) schedSending() {
 		return
 	}
 
-	orchSendWriteBuf(c)
+	c.dialer.orchSendWriteBuf(c)
 	c.write.sched.Reschedule(func() {
 		c.write.survey.pendingSize = 1
 		c.schedSending()
@@ -197,7 +175,7 @@ func (c *ClientConn) sendWriteBuf() {
 		},
 	}
 
-	deadline := time.Now().Add(InactivePurge - time.Second)
+	deadline := time.Now().Add(c.dialer.Timeout - time.Second)
 	for {
 		if resp, err := c.send(f); err != nil {
 			if time.Now().After(deadline) {
@@ -225,11 +203,11 @@ func (c *ClientConn) sendWriteBuf() {
 
 func (c *ClientConn) send(f frame) (resp *http.Response, err error) {
 	client := &http.Client{
-		Timeout:   ClientTimeout,
-		Transport: OnRequestServer(),
+		Timeout:   c.dialer.Timeout,
+		Transport: c.dialer.Transport,
 	}
 
-	req, _ := http.NewRequest("POST", c.endpoint, f.marshal(c.read.blk))
+	req, _ := http.NewRequest("POST", "http://"+c.dialer.endpoint, f.marshal(c.read.blk))
 	resp, err = client.Do(req)
 	if err != nil {
 		return nil, err
@@ -243,7 +221,7 @@ func (c *ClientConn) send(f frame) (resp *http.Response, err error) {
 
 func (c *ClientConn) respLoop() {
 	for body := range c.write.respCh {
-		k := sched.Schedule(func() { body.Close() }, ClientTimeout)
+		k := sched.Schedule(func() { body.Close() }, c.dialer.Timeout)
 		if n, _ := c.read.feedframes(body); n == 0 {
 			c.write.survey.lastIsPositive = false
 		}
