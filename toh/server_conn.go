@@ -57,7 +57,7 @@ func (l *Listener) randomReply(w http.ResponseWriter) {
 }
 
 func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
-	if strings.ToLower(r.Header.Get("Upgrade")) == "websocket" {
+	if strings.ToLower(r.Header.Get("Sec-WebSocket-Key")) != "" {
 		conn, err := l.wsHandShake(w, r)
 		if err != nil {
 			w.WriteHeader(http.StatusBadRequest)

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"crypto/cipher"
 	"crypto/sha1"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/binary"
 	"fmt"
@@ -11,6 +12,8 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 )
 
@@ -83,7 +86,23 @@ READ:
 }
 
 func (d *Dialer) wsHandshake() (net.Conn, error) {
-	conn, err := net.DialTimeout("tcp", d.endpoint, d.Timeout)
+	var (
+		host = d.endpoint
+		conn net.Conn
+		err  error
+	)
+
+REDIR:
+	sch := "http://"
+	if strings.HasSuffix(host, ":443") {
+		sch = "https://"
+		conn, err = tls.DialWithDialer(&net.Dialer{
+			Timeout: d.Timeout,
+		}, "tcp", host, &tls.Config{InsecureSkipVerify: true})
+	} else {
+		conn, err = net.DialTimeout("tcp", host, d.Timeout)
+	}
+
 	if err != nil {
 		return nil, err
 	}
@@ -91,8 +110,8 @@ func (d *Dialer) wsHandshake() (net.Conn, error) {
 	wsKey := [20]byte{}
 	rand.Read(wsKey[:])
 
-	header := "GET http://" + d.endpoint + "/ HTTP/1.1\r\n" +
-		"Host: " + d.endpoint + "\r\n" +
+	header := "GET " + sch + host + "/ HTTP/1.1\r\n" +
+		"Host: " + host + "\r\n" +
 		"Upgrade: websocket\r\n" +
 		"Connection: Upgrade\r\n" +
 		"Sec-WebSocket-Key: " + base64.StdEncoding.EncodeToString(wsKey[:]) + "\r\n" +
@@ -117,6 +136,20 @@ func (d *Dialer) wsHandshake() (net.Conn, error) {
 
 	if resp.StatusCode != http.StatusSwitchingProtocols {
 		conn.Close()
+		if host == d.endpoint {
+			switch resp.StatusCode {
+			case http.StatusMovedPermanently, http.StatusFound, http.StatusPermanentRedirect, http.StatusTemporaryRedirect:
+				// TODO
+				u, _ := url.Parse(resp.Header.Get("Location"))
+				switch u.Scheme {
+				case "https":
+					host = u.Hostname() + ":443"
+				default:
+					host = u.Hostname() + ":80"
+				}
+				goto REDIR
+			}
+		}
 		return nil, fmt.Errorf("invalid websocket response: %v", resp.Status)
 	}
 
