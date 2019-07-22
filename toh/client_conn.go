@@ -35,14 +35,10 @@ type ClientConn struct {
 }
 
 func (d *Dialer) Dial() (net.Conn, error) {
-	c, err := d.newClientConn()
-	if err != nil {
-		return nil, err
-	}
-	return c, nil
+	return d.newClientConn()
 }
 
-func (d *Dialer) newClientConn() (*ClientConn, error) {
+func (d *Dialer) newClientConn() (net.Conn, error) {
 	c := &ClientConn{dialer: d}
 	c.idx = newConnectionIdx()
 	c.write.survey.pendingSize = 1

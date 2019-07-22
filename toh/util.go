@@ -115,4 +115,11 @@ var (
 			}
 		})
 	}
+	WithWebSocket = func() Option {
+		return Option(func(d *Dialer, ln *Listener) {
+			if d != nil {
+				d.WebSocket = true
+			}
+		})
+	}
 )

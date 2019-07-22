@@ -98,6 +98,7 @@ type Dialer struct {
 	blk       cipher.Block
 	Transport http.RoundTripper
 	Timeout   time.Duration
+	WebSocket bool
 }
 
 func NewDialer(network string, endpoint string, options ...Option) *Dialer {
