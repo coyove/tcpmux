@@ -115,10 +115,10 @@ var (
 			}
 		})
 	}
-	WithWebSocket = func() Option {
+	WithWebSocket = func(ws bool) Option {
 		return Option(func(d *Dialer, ln *Listener) {
 			if d != nil {
-				d.WebSocket = true
+				d.WebSocket = ws
 			}
 		})
 	}

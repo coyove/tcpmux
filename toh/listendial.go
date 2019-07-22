@@ -16,7 +16,7 @@ type Listener struct {
 	conns        map[uint64]*ServerConn
 	connsmu      sync.Mutex
 	httpServeErr chan error
-	pendingConns chan *ServerConn
+	pendingConns chan net.Conn
 	blk          cipher.Block
 
 	InactivePurge time.Duration
@@ -54,7 +54,7 @@ func Listen(network string, address string, options ...Option) (net.Listener, er
 	l := &Listener{
 		ln:           ln,
 		httpServeErr: make(chan error, 1),
-		pendingConns: make(chan *ServerConn, 1024),
+		pendingConns: make(chan net.Conn, 1024),
 		conns:        map[uint64]*ServerConn{},
 	}
 
@@ -107,7 +107,6 @@ func NewDialer(network string, endpoint string, options ...Option) *Dialer {
 		orch:     make(chan *ClientConn, 128),
 	}
 	d.blk, _ = aes.NewCipher([]byte(network + "0123456789abcdef")[:16])
-	d.startOrch()
 
 	for _, o := range options {
 		o(d, nil)
@@ -119,5 +118,10 @@ func NewDialer(network string, endpoint string, options ...Option) *Dialer {
 	if d.Timeout == 0 {
 		d.Timeout = time.Second * 15
 	}
+
+	if !d.WebSocket {
+		d.startOrch()
+	}
+
 	return d
 }

@@ -99,6 +99,7 @@ func (d *Dialer) wsHandshake() (net.Conn, error) {
 		"Sec-WebSocket-Version: 13\r\n\r\n"
 
 	if _, err := conn.Write([]byte(header)); err != nil {
+		conn.Close()
 		return nil, err
 	}
 
@@ -110,10 +111,12 @@ func (d *Dialer) wsHandshake() (net.Conn, error) {
 
 	resp, err := http.ReadResponse(c.Conn.(*bufferConn).rd, nil)
 	if err != nil {
+		conn.Close()
 		return nil, err
 	}
 
 	if resp.StatusCode != http.StatusSwitchingProtocols {
+		conn.Close()
 		return nil, fmt.Errorf("invalid websocket response: %v", resp.Status)
 	}
 
@@ -131,6 +134,7 @@ func (ln *Listener) wsHandShake(w http.ResponseWriter, r *http.Request) (net.Con
 		"Upgrade: websocket\r\n" +
 		"Connection: upgrade\r\n" +
 		"Sec-WebSocket-Accept: " + base64.StdEncoding.EncodeToString(ans[:]) + "\r\n\r\n")); err != nil {
+		conn.Close()
 		return nil, err
 	}
 

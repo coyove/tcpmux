@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -56,6 +57,17 @@ func (l *Listener) randomReply(w http.ResponseWriter) {
 }
 
 func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
+	if strings.ToLower(r.Header.Get("Upgrade")) == "websocket" {
+		conn, err := l.wsHandShake(w, r)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(err.Error()))
+		} else {
+			l.pendingConns <- conn
+		}
+		return
+	}
+
 	hdr, ok := parseframe(r.Body, l.blk)
 	if !ok {
 		l.randomReply(w)

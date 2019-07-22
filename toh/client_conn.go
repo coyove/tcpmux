@@ -35,6 +35,9 @@ type ClientConn struct {
 }
 
 func (d *Dialer) Dial() (net.Conn, error) {
+	if d.WebSocket {
+		return d.wsHandshake()
+	}
 	return d.newClientConn()
 }
 

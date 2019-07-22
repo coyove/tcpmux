@@ -51,9 +51,7 @@ func bridge(a, b io.ReadWriteCloser) {
 	go func() { iocopy(b, a); a.Close(); b.Close() }()
 }
 
-type client struct {
-	upstream string
-}
+type client int
 
 type server int
 
@@ -130,18 +128,18 @@ func TestProxy(t *testing.T) {
 
 	go func() {
 		log.Println("hello")
-		up := os.Getenv("UP")
+		up, ws := os.Getenv("UP"), os.Getenv("WS") == "1"
+
 		if up == "" {
 			up = ":10001"
 		}
 
 		dd = NewDialer("tcp", up,
 			WithTransport(http.DefaultTransport),
-			WithInactiveTimeout(time.Second*10))
+			WithInactiveTimeout(time.Second*10),
+			WithWebSocket(ws))
 
-		go http.ListenAndServe(":10000", &client{
-			upstream: up,
-		})
+		go http.ListenAndServe(":10000", new(client))
 
 		ln, _ := Listen("tcp", ":10001",
 			WithInactiveTimeout(time.Second*10))
