@@ -114,7 +114,7 @@ REWRITE:
 		return 0, errClosedConn
 	}
 
-	if len(c.write.buf) > MaxWriteBufferSize {
+	if len(c.write.buf) > c.dialer.MaxWriteBuffer {
 		vprint("write buffer is full")
 		time.Sleep(time.Second)
 		goto REWRITE
@@ -206,7 +206,7 @@ func (c *ClientConn) send(f frame) (resp *http.Response, err error) {
 		Transport: c.dialer.Transport,
 	}
 
-	req, _ := http.NewRequest("POST", "http://"+c.dialer.endpoint, f.marshal(c.read.blk))
+	req, _ := http.NewRequest("POST", "http://"+c.dialer.endpoint+c.dialer.URLPath, f.marshal(c.read.blk))
 	resp, err = client.Do(req)
 	if err != nil {
 		return nil, err

@@ -19,7 +19,8 @@ type Listener struct {
 	pendingConns chan net.Conn
 	blk          cipher.Block
 
-	InactivePurge time.Duration
+	OnBadRequest http.HandlerFunc
+	CommonOptions
 }
 
 func (l *Listener) Close() error {
@@ -62,9 +63,7 @@ func Listen(network string, address string, options ...Option) (net.Listener, er
 		o(nil, l)
 	}
 
-	if l.InactivePurge == 0 {
-		l.InactivePurge = time.Second * 20
-	}
+	l.check()
 
 	l.blk, _ = aes.NewCipher([]byte(network + "0123456789abcdef")[:16])
 
@@ -93,12 +92,13 @@ func Listen(network string, address string, options ...Option) (net.Listener, er
 }
 
 type Dialer struct {
-	endpoint  string
-	orch      chan *ClientConn
-	blk       cipher.Block
+	endpoint string
+	orch     chan *ClientConn
+	blk      cipher.Block
+
 	Transport http.RoundTripper
-	Timeout   time.Duration
 	WebSocket bool
+	CommonOptions
 }
 
 func NewDialer(network string, endpoint string, options ...Option) *Dialer {
@@ -115,13 +115,10 @@ func NewDialer(network string, endpoint string, options ...Option) *Dialer {
 	if d.Transport == nil {
 		d.Transport = http.DefaultTransport
 	}
-	if d.Timeout == 0 {
-		d.Timeout = time.Second * 15
-	}
-
 	if !d.WebSocket {
 		d.startOrch()
 	}
+	d.check()
 
 	return d
 }

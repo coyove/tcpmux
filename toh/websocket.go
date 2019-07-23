@@ -110,7 +110,7 @@ REDIR:
 	wsKey := [20]byte{}
 	rand.Read(wsKey[:])
 
-	header := "GET " + sch + host + "/ HTTP/1.1\r\n" +
+	header := "GET " + sch + host + d.URLPath + " HTTP/1.1\r\n" +
 		"Host: " + host + "\r\n" +
 		"Upgrade: websocket\r\n" +
 		"Connection: Upgrade\r\n" +

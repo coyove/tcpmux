@@ -15,9 +15,6 @@ import (
 	"github.com/coyove/common/sched"
 )
 
-// Define the max pending bytes stored in write buffer, any further bytes will be blocked
-var MaxWriteBufferSize = 1024 * 1024 * 1
-
 const (
 	PING_OK uint16 = iota + 1
 	PING_CLOSED
@@ -45,7 +42,12 @@ func newServerConn(idx uint64, ln *Listener) *ServerConn {
 	return c
 }
 
-func (l *Listener) randomReply(w http.ResponseWriter) {
+func (l *Listener) randomReply(w http.ResponseWriter, r *http.Request) {
+	if l.OnBadRequest != nil {
+		l.OnBadRequest(w, r)
+		return
+	}
+
 	p := [256]byte{}
 	for {
 		if rand.Intn(8) == 0 {
@@ -57,6 +59,11 @@ func (l *Listener) randomReply(w http.ResponseWriter) {
 }
 
 func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
+	if l.URLPath != "" && r.URL.Path != l.URLPath {
+		l.randomReply(w, r)
+		return
+	}
+
 	if strings.ToLower(r.Header.Get("Sec-WebSocket-Key")) != "" {
 		conn, err := l.wsHandShake(w, r)
 		if err != nil {
@@ -70,7 +77,7 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 
 	hdr, ok := parseframe(r.Body, l.blk)
 	if !ok {
-		l.randomReply(w)
+		l.randomReply(w, r)
 		return
 	}
 
@@ -109,7 +116,7 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 		io.Copy(w, f.marshal(l.blk))
 		return
 	default:
-		l.randomReply(w)
+		l.randomReply(w, r)
 		return
 	}
 	connIdx := hdr.connIdx
@@ -123,7 +130,7 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 		// New incoming connection?
 		f, ok := parseframe(r.Body, l.blk)
 		if !ok || f.options&optHello == 0 || f.connIdx != connIdx {
-			l.randomReply(w)
+			l.randomReply(w, r)
 			l.connsmu.Unlock()
 			return
 		}
@@ -158,7 +165,7 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (conn *ServerConn) reschedDeath() {
-	conn.schedPurge.Reschedule(func() { conn.Close() }, conn.rev.InactivePurge)
+	conn.schedPurge.Reschedule(func() { conn.Close() }, conn.rev.Timeout)
 }
 
 func (conn *ServerConn) writeTo(w io.Writer) {
@@ -185,7 +192,7 @@ func (conn *ServerConn) writeTo(w io.Writer) {
 		conn.write.counter++
 		conn.write.Unlock()
 
-		deadline := time.Now().Add(conn.rev.InactivePurge - time.Second)
+		deadline := time.Now().Add(conn.rev.Timeout - time.Second)
 	AGAIN:
 		if _, err := io.Copy(w, f.marshal(conn.read.blk)); err != nil {
 			if time.Now().Before(deadline) {
@@ -223,7 +230,7 @@ REWRITE:
 		return 0, c.read.err
 	}
 
-	if len(c.write.buf) > MaxWriteBufferSize {
+	if len(c.write.buf) > c.rev.MaxWriteBuffer {
 		vprint("write buffer is full")
 		time.Sleep(time.Second)
 		goto REWRITE

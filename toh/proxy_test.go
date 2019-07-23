@@ -8,13 +8,14 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/url"
 	"os"
 	"runtime/pprof"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/miekg/dns"
+	"github.com/coyove/tcpmux/toh/dnshelper"
 )
 
 func iocopy(dst io.Writer, src io.Reader) (written int64, err error) {
@@ -134,15 +135,23 @@ func TestProxy(t *testing.T) {
 			up = ":10001"
 		}
 
+		tr := *http.DefaultTransport.(*http.Transport)
+		tr.MaxConnsPerHost = 100
+
+		u, _ := url.Parse("http://example.com")
+
 		dd = NewDialer("tcp", up,
-			WithTransport(http.DefaultTransport),
+			WithTransport(&tr),
 			WithInactiveTimeout(time.Second*10),
-			WithWebSocket(ws))
+			WithWebSocket(ws),
+			WithPath("/aaa"))
 
 		go http.ListenAndServe(":10000", new(client))
 
 		ln, _ := Listen("tcp", ":10001",
-			WithInactiveTimeout(time.Second*10))
+			WithInactiveTimeout(time.Second*10),
+			WithPath("/aaa"),
+			WithBadRequest(httputil.NewSingleHostReverseProxy(u).ServeHTTP))
 		for {
 			conn, _ := ln.Accept()
 			go foo(conn)
@@ -153,32 +162,9 @@ func TestProxy(t *testing.T) {
 	select {}
 }
 
-func dnsIterQueryLocal(host string) net.IP {
-	if idx := strings.LastIndex(host, ":"); idx > -1 {
-		host = host[:idx]
-	}
-	if !strings.HasSuffix(host, ".") {
-		host += "."
-	}
+func TestDNSHook(t *testing.T) {
+	t.Log(dnshelper.LookupIPv4("cloud.bytedance.net", true))
+	t.Log(dnshelper.LookupIPv4("cloud.bytedance.net", true))
+	t.Log(dnshelper.LookupIPv4("cloud.bytedance.net", true))
 
-	c := &dns.Client{Timeout: time.Millisecond * 100}
-	m := &dns.Msg{}
-	m.Id = dns.Id()
-	m.RecursionDesired = false
-	m.Question = []dns.Question{dns.Question{host, dns.TypeA, dns.ClassINET}}
-
-	in, _, err := c.Exchange(m, "10.93.192.1:53")
-	if err != nil || len(in.Answer) == 0 {
-		vprint(err)
-		return net.IPv4zero
-	}
-
-	switch a := in.Answer[0].(type) {
-	case *dns.A:
-		return a.A
-	case *dns.CNAME:
-		return dnsIterQueryLocal(a.Target)
-	default:
-		return net.IPv4zero
-	}
 }
