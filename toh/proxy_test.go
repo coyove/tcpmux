@@ -1,9 +1,7 @@
 package toh
 
 import (
-	"bufio"
 	"io"
-	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -14,8 +12,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/coyove/tcpmux/toh/dnshelper"
 )
 
 func iocopy(dst io.Writer, src io.Reader) (written int64, err error) {
@@ -83,7 +79,7 @@ func (s *client) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func foo(conn net.Conn) {
-	down := bufio.NewReader(conn)
+	down := NewBufConn(conn)
 	buf, err := down.ReadBytes('\n')
 	if err != nil || len(buf) < 2 {
 		conn.Close()
@@ -98,20 +94,15 @@ func foo(conn net.Conn) {
 	up, _ := net.Dial("tcp", host)
 
 	if up == nil || down == nil {
-		conn.Write([]byte("HTTP/1.1 503 Service Unavailable\r\n\r\n"))
+		down.Write([]byte("HTTP/1.1 503 Service Unavailable\r\n\r\n"))
 		return
 	}
 
 	if connect {
-		conn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
+		down.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
 	}
 
-	dd := &struct {
-		io.ReadCloser
-		io.Writer
-	}{ioutil.NopCloser(down), conn}
-
-	bridge(dd, up)
+	bridge(down, up)
 }
 
 func TestProxy(t *testing.T) {
@@ -160,11 +151,4 @@ func TestProxy(t *testing.T) {
 
 	//	Verbose = false
 	select {}
-}
-
-func TestDNSHook(t *testing.T) {
-	t.Log(dnshelper.LookupIPv4("cloud.bytedance.net", true))
-	t.Log(dnshelper.LookupIPv4("cloud.bytedance.net", true))
-	t.Log(dnshelper.LookupIPv4("cloud.bytedance.net", true))
-
 }

@@ -1,7 +1,6 @@
 package toh
 
 import (
-	"bufio"
 	"crypto/cipher"
 	"crypto/sha1"
 	"crypto/tls"
@@ -16,15 +15,6 @@ import (
 	"strings"
 	"sync"
 )
-
-type bufferConn struct {
-	net.Conn
-	rd *bufio.Reader
-}
-
-func (c *bufferConn) Read(p []byte) (int, error) {
-	return c.rd.Read(p)
-}
 
 type WSConn struct {
 	net.Conn
@@ -123,12 +113,12 @@ REDIR:
 	}
 
 	c := &WSConn{
-		Conn: &bufferConn{Conn: conn, rd: bufio.NewReader(conn)},
+		Conn: NewBufConn(conn),
 		mask: true,
 		blk:  d.blk,
 	}
 
-	resp, err := http.ReadResponse(c.Conn.(*bufferConn).rd, nil)
+	resp, err := http.ReadResponse(c.Conn.(*BufConn).Reader, nil)
 	if err != nil {
 		conn.Close()
 		return nil, err

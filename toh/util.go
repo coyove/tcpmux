@@ -1,9 +1,11 @@
 package toh
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"math/rand"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -92,4 +94,21 @@ func newConnectionIdx() uint64 {
 
 func frameTmpPath(connIdx uint64, idx uint32) string {
 	return filepath.Join(os.TempDir(), fmt.Sprintf("%x-%d.toh", connIdx, idx))
+}
+
+type BufConn struct {
+	net.Conn
+	*bufio.Reader
+}
+
+func NewBufConn(conn net.Conn) *BufConn {
+	return &BufConn{Conn: conn, Reader: bufio.NewReader(conn)}
+}
+
+func (c *BufConn) Write(p []byte) (int, error) {
+	return c.Conn.Write(p)
+}
+
+func (c *BufConn) Read(p []byte) (int, error) {
+	return c.Reader.Read(p)
 }
