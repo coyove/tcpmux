@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"math/rand"
+	"sync/atomic"
 	"time"
 
 	"github.com/coyove/common/sched"
@@ -16,9 +17,18 @@ func init() {
 func (d *Dialer) startOrch() {
 	sched.Verbose = false
 
+	var (
+		directs   int    // number of requests with valid payload
+		pings     int    // number of requests with no payload (ping)
+		positives uint64 // number of positive pings (server said it had valid data for this ClientConn to read)
+		loopcount int    // number of orch loops
+	)
+
 	go func() {
 		for {
 			conns := make(map[uint64]*ClientConn)
+			loopcount++
+
 		READ:
 			for {
 				select {
@@ -29,23 +39,25 @@ func (d *Dialer) startOrch() {
 				}
 			}
 
+			if loopcount%20 == 0 || positives > 0 {
+				vprint("orch pings: ", pings, "(+", positives, "), directs: ", directs)
+				directs, pings, positives = 0, 0, 0
+			}
+
 			if len(conns) == 0 {
 				time.Sleep(200 * time.Millisecond)
 				continue
 			}
 
-			var (
-				p        bytes.Buffer
-				count    int
-				lastconn *ClientConn
-			)
+			var p bytes.Buffer
+			var lastconn *ClientConn
 
 			for k, conn := range conns {
 				if len(conn.write.buf) > 0 || conn.write.survey.lastIsPositive {
 					// For connections with actual data waiting to be sent, send them directly
 					go conn.sendWriteBuf()
 					delete(conns, k)
-					count++
+					directs++
 					continue
 				}
 
@@ -55,18 +67,20 @@ func (d *Dialer) startOrch() {
 
 			if len(conns) <= 3 {
 				for _, conn := range conns {
-					count++
+					directs++
 					go conn.sendWriteBuf()
 				}
 				lastconn = nil
 			}
 
 			if lastconn == nil {
-				vprint("batch ping: 0, direct: ", count)
+				// vprint("batch ping: 0, direct: ", count)
 				continue
 			}
 
 			pingframe := frame{options: optPing, data: p.Bytes()}
+			pings += p.Len() / 8
+
 			go func(pingframe frame, lastconn *ClientConn, conns map[uint64]*ClientConn) {
 				resp, err := lastconn.send(pingframe)
 				if err != nil {
@@ -80,7 +94,6 @@ func (d *Dialer) startOrch() {
 					return
 				}
 
-				positives := 0
 				for i := 0; i < len(f.data); i += 10 {
 					connState := binary.BigEndian.Uint16(f.data[i:])
 					connIdx := binary.BigEndian.Uint64(f.data[i+2:])
@@ -94,14 +107,13 @@ func (d *Dialer) startOrch() {
 						case PING_OK_VOID:
 							c.write.survey.lastIsPositive = false
 						case PING_OK:
-							positives++
+							atomic.AddUint64(&positives, 1)
 							c.write.survey.lastIsPositive = true
 							go c.sendWriteBuf()
 						}
 					}
 				}
 
-				vprint("batch ping: ", len(pingframe.data)/8, "(+", positives, "), direct: ", count)
 				resp.Body.Close()
 			}(pingframe, lastconn, conns)
 		}

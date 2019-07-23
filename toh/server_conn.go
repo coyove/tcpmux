@@ -43,6 +43,8 @@ func newServerConn(idx uint64, ln *Listener) *ServerConn {
 }
 
 func (l *Listener) randomReply(w http.ResponseWriter, r *http.Request) {
+	vprint("listener random reply: ", r)
+
 	if l.OnBadRequest != nil {
 		l.OnBadRequest(w, r)
 		return
@@ -130,7 +132,11 @@ func (l *Listener) handler(w http.ResponseWriter, r *http.Request) {
 		// New incoming connection?
 		f, ok := parseframe(r.Body, l.blk)
 		if !ok || f.options&optHello == 0 || f.connIdx != connIdx {
-			l.randomReply(w, r)
+			if !ok {
+				l.randomReply(w, r)
+			} else {
+				// TODO: tell client the conn has gone
+			}
 			l.connsmu.Unlock()
 			return
 		}

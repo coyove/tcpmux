@@ -17,14 +17,14 @@ import (
 var (
 	DefaultResolver   string
 	defaultResolvermu sync.Mutex
-	dnsCache          = lru.NewCache(1024)
+	DNSCache          = lru.NewCache(1024)
 )
 
 func LookupIPv4(host string, local bool) (net.IP, error) {
 	if local {
 		return dnsNonRecursiveQueryIPv4(host)
 	}
-	if c, ok := dnsCache.Get(host); ok {
+	if c, ok := DNSCache.Get(host); ok {
 		return c.(net.IP), nil
 	}
 	ips, err := net.LookupIP(host)
@@ -34,7 +34,7 @@ func LookupIPv4(host string, local bool) (net.IP, error) {
 	for _, ip := range ips {
 		ip4 := ip.To4()
 		if ip4 != nil {
-			dnsCache.Add(host, ip4)
+			DNSCache.Add(host, ip4)
 			return ip4, nil
 		}
 	}
@@ -48,7 +48,7 @@ func dnsNonRecursiveQueryIPv4(host string) (net.IP, error) {
 	if !strings.HasSuffix(host, ".") {
 		host += "."
 	}
-	if c, ok := dnsCache.Get(host); ok {
+	if c, ok := DNSCache.Get(host); ok {
 		return c.(net.IP), nil
 	}
 
@@ -86,7 +86,7 @@ func dnsNonRecursiveQueryIPv4(host string) (net.IP, error) {
 	for _, ans := range in.Answer {
 		switch a := ans.(type) {
 		case *dns.A:
-			dnsCache.Add(host, a.A)
+			DNSCache.Add(host, a.A)
 			return a.A, nil
 		case *dns.CNAME:
 			return dnsNonRecursiveQueryIPv4(a.Target)
