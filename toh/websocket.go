@@ -12,7 +12,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"strings"
 	"sync"
 )
 
@@ -77,18 +76,15 @@ READ:
 
 func (d *Dialer) wsHandshake() (net.Conn, error) {
 	var (
-		host = d.endpoint
-		conn net.Conn
-		err  error
+		host  = d.endpoint
+		conn  net.Conn
+		err   error
+		https bool
 	)
 
 REDIR:
-	sch := "http://"
-	if strings.HasSuffix(host, ":443") {
-		sch = "https://"
-		conn, err = tls.DialWithDialer(&net.Dialer{
-			Timeout: d.Timeout,
-		}, "tcp", host, &tls.Config{InsecureSkipVerify: true})
+	if https {
+		conn, err = tls.DialWithDialer(&net.Dialer{Timeout: d.Timeout}, "tcp", host, &tls.Config{InsecureSkipVerify: true})
 	} else {
 		conn, err = net.DialTimeout("tcp", host, d.Timeout)
 	}
@@ -100,7 +96,12 @@ REDIR:
 	wsKey := [20]byte{}
 	rand.Read(wsKey[:])
 
-	header := "GET " + sch + host + d.URLPath + " HTTP/1.1\r\n" +
+	path := d.URLPath
+	if path == "" {
+		path = "/"
+	}
+
+	header := "GET " + path + " HTTP/1.1\r\n" +
 		"Host: " + host + "\r\n" +
 		"Upgrade: websocket\r\n" +
 		"Connection: Upgrade\r\n" +
@@ -131,11 +132,14 @@ REDIR:
 			case http.StatusMovedPermanently, http.StatusFound, http.StatusPermanentRedirect, http.StatusTemporaryRedirect:
 				// TODO
 				u, _ := url.Parse(resp.Header.Get("Location"))
-				switch u.Scheme {
-				case "https":
-					host = u.Hostname() + ":443"
-				default:
-					host = u.Hostname() + ":80"
+				host, https = u.Host, u.Scheme == "https"
+
+				if _, _, err := net.SplitHostPort(host); err != nil {
+					if https {
+						host += ":443"
+					} else {
+						host += ":80"
+					}
 				}
 				goto REDIR
 			}
