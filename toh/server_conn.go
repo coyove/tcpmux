@@ -253,6 +253,10 @@ func (c *ServerConn) Read(p []byte) (n int, err error) {
 }
 
 func (c *ServerConn) Close() error {
+	if c.read.closed {
+		return nil
+	}
+
 	vprint("server: close conn: ", c)
 	c.schedPurge.Cancel()
 	c.read.close()
